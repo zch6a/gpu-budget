@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>gpu-budget: GPU memory, time and cost for LLMs</title>
+<meta name="description" content="How much GPU memory, time and money training, fine-tuning or serving an LLM takes, each part shown with its formula, checked against published training runs.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>gpu-<span>budget</span></h1>
+  <p>How much GPU memory, time and money an LLM takes: every part apart, with its formula, checked against published runs. The link always holds your settings.</p>
+</header>
+<main>
+  <form id="form" autocomplete="off">
+    <fieldset class="modes">
+      <legend>What</legend>
+      <label><input type="radio" name="mode" value="infer" checked> Serve</label>
+      <label><input type="radio" name="mode" value="finetune"> Fine-tune</label>
+      <label><input type="radio" name="mode" value="train"> Train</label>
+    </fieldset>
+    <label>Model <select name="model" id="model"></select></label>
+    <label id="custom-row" hidden>config.json <textarea name="config" id="config" rows="5" placeholder='Paste a Hugging Face config.json: {"num_hidden_layers": 32, ...}'></textarea></label>
+    <label>GPU <select name="gpu" id="gpu"></select></label>
+
+    <div class="group" data-mode="infer">
+      <label>Weights <select name="quant"><option value="bf16">BF16</option><option value="fp8">FP8</option><option value="int8">INT8</option><option value="int4">INT4</option></select></label>
+      <label>KV cache <select name="kv"><option value="bf16">BF16</option><option value="fp8">FP8</option><option value="int8">INT8</option></select></label>
+      <label>Context (tokens) <input name="ctx" type="number" min="1" value="8192"></label>
+      <label>Batch (sequences) <input name="batch" type="number" min="1" value="1"></label>
+      <label>GPUs (tensor parallel) <input name="tpi" type="number" min="1" value="1"></label>
+      <label>Draft model <select name="draft" id="draft"><option value="">none</option></select></label>
+    </div>
+
+    <div class="group" data-mode="finetune">
+      <label>Method <select name="method"><option value="qlora">QLoRA</option><option value="lora">LoRA</option><option value="full">Full</option></select></label>
+      <label>LoRA rank <input name="rank" type="number" min="1" value="16"></label>
+    </div>
+
+    <div class="group" data-mode="train finetune">
+      <label>GPUs <input name="gpus" type="number" min="1" value="1"></label>
+      <label>ZeRO / FSDP <select name="zero"><option value="0">none</option><option value="1">stage 1</option><option value="2">stage 2</option><option value="3">stage 3 (FSDP full shard)</option></select></label>
+      <label>Tensor parallel <input name="tp" type="number" min="1" value="1"></label>
+      <label>Pipeline parallel <input name="pp" type="number" min="1" value="1"></label>
+      <label>Sequence length <input name="seq" type="number" min="1" value="4096"></label>
+      <label>Micro-batch <input name="mb" type="number" min="1" value="1"></label>
+      <label>Recompute <select name="recompute"><option value="full">full (gradient checkpointing)</option><option value="none">none</option></select></label>
+      <label>Optimizer <select name="optimizer"><option value="adamw">AdamW (mixed precision)</option><option value="adamw-8bit">AdamW 8-bit</option><option value="adamw-bf16">AdamW BF16 states</option><option value="sgd">SGD momentum</option></select></label>
+    </div>
+
+    <div class="group" data-mode="train">
+      <label>Training tokens <input name="tokens" type="text" value="1e12" inputmode="decimal"></label>
+      <label>MFU <input name="mfu" type="number" min="0.01" max="1" step="0.01" value="0.4"></label>
+      <label>Price, $ per GPU-hour <input name="price" type="number" min="0" step="0.01" placeholder="optional"></label>
+    </div>
+  </form>
+
+  <section id="result" aria-live="polite">
+    <p id="verdict"></p>
+    <div id="bar" class="bar"></div>
+    <table id="parts"><tbody></tbody></table>
+    <p id="compute"></p>
+    <p id="error" class="error" hidden></p>
+    <p class="note" id="note"></p>
+  </section>
+</main>
+<section class="records">
+  <h2>Checked against published numbers</h2>
+  <table id="records"><thead><tr><th>What</th><th>Published</th><th>gpu-budget</th></tr></thead><tbody></tbody></table>
+</section>
+<footer>Formulas: ZeRO (arXiv:1910.02054), activations after Korthikanti et al. (arXiv:2205.05198), compute 6 × parameters × tokens. GPU figures from the makers' datasheets, dense. <a href="https://github.com/zch6a/gpu-budget">Source and command line</a>.</footer>
+<script type="module" src="app.js"></script>
+</body>
+</html>

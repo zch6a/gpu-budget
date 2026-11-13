@@ -1,0 +1,52 @@
+{
+  "name": "gpu-budget",
+  "version": "0.1.0",
+  "description": "How much GPU memory, time and money training, fine-tuning or serving an LLM takes: parameters, optimizer states, activations, ZeRO/FSDP, tensor and pipeline parallelism, MoE, LoRA/QLoRA, KV cache, quantization. One engine for the command line and the page, checked against published training runs.",
+  "keywords": [
+    "gpu",
+    "vram",
+    "memory",
+    "llm",
+    "training",
+    "inference",
+    "kv-cache",
+    "zero",
+    "fsdp",
+    "lora",
+    "qlora",
+    "calculator"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zch6a/gpu-budget.git"
+  },
+  "homepage": "https://github.com/zch6a/gpu-budget#readme",
+  "bugs": {
+    "url": "https://github.com/zch6a/gpu-budget/issues"
+  },
+  "type": "module",
+  "bin": {
+    "gpu-budget": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "site",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\"",
+    "typecheck": "tsc -p jsconfig.json",
+    "check": "npm run typecheck && npm test",
+    "site": "node scripts/site.js"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^5.9.3"
+  }
+}
