@@ -63,6 +63,10 @@ GPU 数据来自厂商规格页，按稠密张量算力（NVIDIA 标的是稀疏
 - Apple：默认 GPU 大约可用统一内存的四分之三（一个假设，macOS 可以调整）。
 - AMD Instinct（MI300X、MI325X、MI355X）只收录了显存（来自 ROCm 的 GPU 表）；其张量算力还无法核对，所以不估算时间。
 
+## 属于 research-kit
+
+这是 13 个开源科研工具之一，覆盖从读论文到论文发表之后。全部工具按科研流程的介绍，以及安装它们技能的 Claude Code 插件市场，见 [research-kit](https://github.com/zch6a/research-kit) · [网站](https://zch6a.github.io/research-kit/)。
+
 ## 许可证
 
 MIT。

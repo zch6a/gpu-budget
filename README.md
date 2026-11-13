@@ -116,6 +116,12 @@ so check the page before relying on one.
 [paper-page](https://github.com/zch6a/paper-page) makes a project page from an arXiv ID ·
 [paper-impact](https://github.com/zch6a/paper-impact) shows which papers at AI venues mattered.
 
+## Part of research-kit
+
+One of thirteen open research tools, from reading papers to after publication. All of them, in the order of
+the work, with one Claude Code plugin marketplace for their skills: [research-kit](https://github.com/zch6a/research-kit)
+· [site](https://zch6a.github.io/research-kit/).
+
 ## License
 
 MIT.
