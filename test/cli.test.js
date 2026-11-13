@@ -89,3 +89,25 @@ describe("the README", () => {
     assert.equal(run(command[1].split(" ")).out, shown[1]);
   });
 });
+
+describe("prices", () => {
+  it("a provider's listed price, with its offer, date and source", () => {
+    const r = run(["train", "llama-3.1-8b", "--gpus", "8", "--zero", "3", "--tokens", "1e11", "--price", "runpod"]);
+    assert.equal(r.code, 0);
+    assert.match(r.out, /price: runpod Secure Cloud pod, \$4\.39\/GPU-hour, checked 2026-11-13 \(https:\/\/www\.runpod\.io\/pricing\)/);
+    const j = JSON.parse(run(["train", "llama-3.1-8b", "--gpus", "8", "--zero", "3", "--tokens", "1e11", "--price", "runpod", "--json"]).out);
+    assert.equal(j.compute.cost, j.compute.gpuHours * 4.39);
+  });
+
+  it("no listed price for that GPU: one line naming the providers that list it", () => {
+    const r = run(["train", "llama-3.1-8b", "--tokens", "1e11", "--price", "lambda", "--gpu", "l40s"]);
+    assert.equal(r.code, 2);
+    assert.match(r.err, /no listed price for l40s \(listed: runpod\)/);
+  });
+
+  it("gpu-budget prices lists every price with its date and source", () => {
+    const r = run(["prices"]);
+    assert.match(r.out, /lambda\s+h100-sxm\s+\$ 4\.59\/GPU-hour/);
+    assert.match(r.out, /check the provider's page/);
+  });
+});

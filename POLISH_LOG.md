@@ -38,3 +38,47 @@ to `label { display: grid }` and the mode buttons' hidden radios overflowed the 
 Tests: 52 (node:test), type check clean.
 
 Next: polishing round 1 (cloud prices with dates and sources; AMD; an independent review).
+
+### 2026-11-13 — polishing round 1
+
+**Prices**: on-demand list prices read today from RunPod's (Secure Cloud) and Lambda's (8-GPU instances) pricing
+pages, each with the offer it is for, the date and the link (`src/data.js`). Lambda's page says its prices take effect
+on 2026-11-16, which the entries say. `--price runpod` uses a provider's price for the GPU (and the report names it);
+`gpu-budget prices` lists them; the page offers them per GPU. RunPod's community prices came from the page's metadata
+rather than its cards and were left out.
+
+**AMD**: MI300X, MI325X and MI355X are in with their memory from ROCm's GPU table; AMD's product pages and datasheet
+timed out every time, so their tensor throughput is not in (no time estimate, said so).
+
+**First independent review** (11 defects and 4 smaller items, all fixed; tests in `test/review1.test.js`):
+
+1. Expert parallelism with ZeRO sharded the experts' states twice (by EP, then over all data-parallel GPUs): Mixtral on
+   8 GPUs, EP 8, ZeRO-3 showed 10.1 GiB of optimizer state for about 65. The experts' states are sharded over the
+   experts' own data-parallel group; EP must divide the data-parallel GPUs and the experts.
+2. DeepSeek-V3's latent KV cache was divided by tensor parallelism; serving engines keep it whole on each GPU.
+3. A config.json without `tie_word_embeddings` was counted untied (Gemma 2 +918M): tied, Hugging Face's default.
+   The test had patched the key in.
+4. Fine-tuning ignored ZeRO (and then advised adding it): ZeRO-3 / FSDP shards the frozen weights, the adapters'
+   states from ZeRO-1/2.
+5. The inference buffer grew with the batch (a 512-token chunk per sequence): one 8,192-token prefill budget shared.
+6. KV heads were divided fractionally over tensor-parallel GPUs: split when they divide, one per GPU (replicated) when
+   there are more GPUs, refused otherwise.
+7. Pipeline stages were taken as equal: the embedding sits on the first, the output layer and logits on the last; the
+   fuller end is reported (and named).
+8. `constructor` was a model (Object's own properties): own keys only.
+9. config.json: Qwen-MoE's shared expert ignored, DeepSeek's latent attention with a wrong head size, GPT-NeoX given
+   learned positions: all read now. Multi-head latent attention is modelled in full, so DeepSeek-V3 is computed rather
+   than hard-coded: 671.03B and 37.55B active, against the paper's 671B and 37B.
+10. (plausible) ZeRO-3's gathered layer was not counted: one layer's weights and a gradient buffer are now.
+11. (plausible) LoRA compute charged 6N: 4 × frozen + 6 × adapter parameters.
+
+Smaller: ZeRO-2/3 with pipeline parallelism is refused (DeepSpeed refuses it; Megatron shards only the optimizer);
+values out of range (MFU 5, a negative price, tp 0.5) are refused in the engine, so the page shows the error too;
+`--price` or `--mfu` without `--tokens` is an error, not ignored; the README's claims are exact now (11 models to the
+parameter, GPT-3 and DeepSeek-V3 against their papers' rounded counts, OPT-13B unchecked).
+
+The README's example moved from 33.4 to 36.6 GiB (ZeRO-3's gathered layer); screenshot and social card redone.
+
+Tests: 70 (were 52), type check clean.
+
+Next: round 2.

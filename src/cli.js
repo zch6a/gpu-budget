@@ -3,8 +3,8 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { BYTES, GPUS, MODELS } from "./data.js";
-import { finetuneMemory, fromHFConfig, gib, gpu, inferMemory, model, OPTIMIZERS, params, trainMemory, trainTime, usableBytes } from "./engine.js";
+import { BYTES, GPUS, MODELS, PRICES } from "./data.js";
+import { finetuneMemory, fromHFConfig, gib, gpu, inferMemory, loraParams, model, OPTIMIZERS, params, priceFor, trainMemory, trainTime, usableBytes } from "./engine.js";
 
 const VERSION = "0.1.0";
 
@@ -13,7 +13,7 @@ const HELP = `gpu-budget: how much GPU memory, time and money an LLM takes.
   gpu-budget train llama-3.1-8b --gpu h100-sxm --gpus 8 --zero 3 --seq 4096 --tokens 1e12
   gpu-budget finetune llama-3.1-8b --method qlora --rank 16 --gpu rtx-4090
   gpu-budget infer llama-3.1-70b --quant int4 --ctx 32768 --batch 4 --gpu h100-sxm
-  gpu-budget models | gpus
+  gpu-budget models | gpus | prices
 
 A model is a built-in name (gpu-budget models) or a Hugging Face config.json (a path).
 Memory is per GPU; each part is shown apart.
@@ -23,7 +23,8 @@ training and fine-tuning:
   --zero 0|1|2|3      ZeRO stage / FSDP (0)    --optimizer adamw|adamw-8bit|adamw-bf16|sgd (adamw)
   --seq N             sequence length (4096)   --micro-batch N   sequences per GPU per step (1)
   --recompute none|full (none; full for finetune, as LoRA/QLoRA practice)   --no-flash   attention without FlashAttention
-  --tokens N          training tokens: adds compute, time (with --mfu, 0.4) and cost (with --price, $/GPU-hour)
+  --tokens N          training tokens: adds compute, time (with --mfu, 0.4) and cost (with --price: $ per GPU-hour, or a
+                      provider whose listed price for the GPU is used: runpod, lambda; gpu-budget prices)
   --method full|lora|qlora, --rank N (16), --targets all|attention (fine-tuning)
 inference:
   --quant bf16|fp8|int8|int4 (bf16)   --kv bf16|fp8|int8 (bf16)   --ctx N (4096)   --batch N (1)
@@ -71,6 +72,24 @@ function number(v, name, o = {}) {
     throw new Error(`--${name} ${v}: expected ${o.int ? "a whole number" : "a number"}${o.min !== undefined ? ` ≥ ${o.min}` : ""}${o.max !== undefined ? ` ≤ ${o.max}` : ""}`);
   }
   return n;
+}
+
+/**
+ * --price: a number of dollars per GPU-hour, or a provider whose listed price for the GPU is used (noted in the report).
+ * @param {string | undefined} v @param {string} gpuId @param {Record<string, unknown>} report
+ */
+function price(v, gpuId, report) {
+  if (v === undefined) return undefined;
+  if (/^[a-z]+$/i.test(v)) {
+    const listed = priceFor(v, gpuId);
+    if (!listed) {
+      const here = PRICES.filter((p) => p.gpu === gpuId.toLowerCase()).map((p) => p.provider);
+      throw new Error(`--price ${v}: no listed price for ${gpuId}${here.length ? ` (listed: ${here.join(", ")})` : ""}; give a number of $ per GPU-hour`);
+    }
+    report.listedPrice = listed;
+    return listed.usd;
+  }
+  return number(v, "price");
 }
 
 /** @param {string} v @param {string} name @param {readonly string[]} choices */
@@ -136,13 +155,18 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
       }
       return 0;
     }
+    if (command === "prices") {
+      for (const p of PRICES) out(`${p.provider.padEnd(8)} ${p.gpu.padEnd(12)} $${p.usd.toFixed(2).padStart(5)}/GPU-hour  ${p.offer}, checked ${p.checked}  ${p.source}`);
+      out("Listed on-demand prices change: check the provider's page before relying on one.");
+      return 0;
+    }
     if (command === "gpus") {
       for (const [k, g] of Object.entries(GPUS)) {
         out(`${k.padEnd(14)} ${g.name.padEnd(32)} ${String(g.memory).padStart(4)} GiB  ${g.bf16 ? `${g.bf16} TFLOPS BF16` : "compute not published"}`);
       }
       return 0;
     }
-    if (!["train", "finetune", "infer"].includes(command ?? "")) throw new Error(`unknown command ${command ?? ""} (train, finetune, infer, models, gpus)`);
+    if (!["train", "finetune", "infer"].includes(command ?? "")) throw new Error(`unknown command ${command ?? ""} (train, finetune, infer, models, gpus, prices)`);
     if (!id) throw new Error(`${command}: which model? (gpu-budget models, or a config.json)`);
     const m = loadModel(id);
     const g = gpu(v.gpu ?? "h100-sxm");
@@ -173,14 +197,18 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
       if (command === "finetune") {
         const method = /** @type {"full"|"lora"|"qlora"} */ (choice(v.method ?? "lora", "method", ["full", "lora", "qlora"]));
         const targets = /** @type {"all"|"attention"} */ (choice(v.targets ?? "all", "targets", ["all", "attention"]));
-        memory = finetuneMemory({ ...cfg, method, rank: number(v.rank, "rank", { int: true, min: 1 }), targets });
+        const rank = number(v.rank, "rank", { int: true, min: 1 });
+        memory = finetuneMemory({ ...cfg, method, rank, targets });
         report.method = method;
+        if (method !== "full") report.trainable = loraParams(m, rank ?? 16, targets);
       } else {
         memory = trainMemory(cfg);
       }
+      if (v.tokens === undefined && (v.price !== undefined || v.mfu !== undefined)) throw new Error("--price and --mfu need --tokens (the tokens to train on)");
       if (v.tokens !== undefined) {
         const t = trainTime({ model: m, tokens: /** @type {number} */ (number(v.tokens, "tokens", { min: 1 })), gpus: cfg.gpus ?? 1, gpu: g,
-          mfu: number(v.mfu, "mfu", { min: 0.01, max: 1 }), price: number(v.price, "price"), seq: cfg.seq, fp8: v.fp8 }); // prettier-ignore
+          mfu: number(v.mfu, "mfu", { min: 0.01, max: 1 }), price: price(v.price, v.gpu ?? "h100-sxm", report), seq: cfg.seq, fp8: v.fp8,
+          trainable: /** @type {number | undefined} */ (report.trainable) }); // prettier-ignore
         report.compute = t;
       }
     }
@@ -191,7 +219,7 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
       out(JSON.stringify(report, null, 2));
       return fits ? 0 : 1;
     }
-    out(`${m.name} on ${g.name}, ${command}${report.method ? ` (${report.method})` : ""}: per GPU`);
+    out(`${m.name} on ${g.name}, ${command}${report.method ? ` (${report.method})` : ""}: per GPU${memory.stage ? ` (the fuller end of the pipeline: its ${memory.stage} stage)` : ""}`);
     const labels = { weights: "weights", grads: "gradients", optimizer: "optimizer state", activations: command === "infer" ? "working buffer" : "activations",
       kvCache: "KV cache", draft: "draft model", overhead: "CUDA context, allocator" }; // prettier-ignore
     for (const [k, label] of Object.entries(labels)) {
@@ -201,10 +229,12 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
     out(`  ${"total".padEnd(24)} ${gib(memory.total).padStart(11)}  of ${gib(usable)}: ${fits ? "fits" : "does not fit"} (${((memory.total / usable) * 100).toFixed(0)}%)`);
     const t = /** @type {ReturnType<typeof trainTime> | undefined} */ (report.compute);
     if (t) {
-      out(`  compute ${t.flops.toExponential(2)} FLOPs (6 × ${short(params(m).active)} active params × tokens)`);
+      out(`  compute ${t.flops.toExponential(2)} FLOPs (${report.trainable !== undefined ? `4 × ${short(params(m).active)} frozen + 6 × ${short(/** @type {number} */ (report.trainable))} adapter` : `6 × ${short(params(m).active)} active`} params × tokens)`);
       if (t.seconds !== null && t.gpuHours !== null) {
         out(`  time ${duration(t.seconds)} on ${cfg_gpus(v.gpus)} GPU(s) at ${(t.mfu * 100).toFixed(0)}% MFU of ${t.peak} TFLOPS: ${short(t.gpuHours)} GPU-hours` +
           (t.cost !== null ? `, $${short(t.cost)}` : " (add --price for the cost)")); // prettier-ignore
+        const listed = /** @type {import("./data.js").Price | undefined} */ (report.listedPrice);
+        if (listed) out(`  price: ${listed.provider} ${listed.offer}, $${listed.usd}/GPU-hour, checked ${listed.checked} (${listed.source})`);
       } else {
         out(`  time: ${g.name} has no published tensor throughput`);
       }

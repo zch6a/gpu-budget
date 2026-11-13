@@ -21,7 +21,7 @@ describe("parameters", () => {
   for (const [id, m] of Object.entries(MODELS)) {
     if (!m.published) continue;
     it(`${id}: the architecture gives the published count`, () => {
-      const exact = id !== "gpt-3-175b"; // GPT-3's paper rounds to 174,600 million
+      const exact = !["gpt-3-175b", "deepseek-v3"].includes(id); // their papers round (174,600 million; 671B)
       const total = params(m).total;
       if (exact) assert.equal(total, m.published);
       else assert.ok(Math.abs(total / /** @type {number} */ (m.published) - 1) < 1e-4, `${total}`);
@@ -55,19 +55,24 @@ describe("training memory", () => {
     assert.equal(at(1).grads, n * 2);
     assert.equal(at(2).grads, (n * 2) / 8);
     assert.equal(at(2).weights, n * 2);
-    assert.equal(at(3).weights, (n * 2) / 8);
+    const layer = (n - params(m).embed - params(m).head) / m.layers; // ZeRO-3 gathers one layer whole, and reduces its gradients whole
+    assert.equal(at(3).weights, (n * 2) / 8 + layer * 2);
+    assert.equal(at(3).grads, (n * 2) / 8 + layer * 2);
   });
 
   it("tensor and pipeline parallelism divide the model; the GPU count must fit them", () => {
     const a = trainMemory({ model: m, gpus: 8, tp: 2, pp: 2 });
-    assert.equal(a.weights, (n * 2) / 4);
+    const p = params(m);
+    // the fuller end: the first stage, which keeps as many microbatches as there are stages (1F1B), and the embedding
+    assert.equal(a.stage, "first");
+    assert.equal(a.weights, ((n - p.embed - p.head) / 2 + p.embed) / 2 * 2);
     assert.throws(() => trainMemory({ model: m, gpus: 6, tp: 4 }), /multiple of tp × pp/);
   });
 
   it("expert parallelism divides only the experts", () => {
     const mx = MODELS["mixtral-8x7b"];
     const p = params(mx);
-    const a = trainMemory({ model: mx, ep: 8 });
+    const a = trainMemory({ model: mx, gpus: 8, ep: 8 });
     assert.equal(a.weights, (p.total - p.experts + p.experts / 8) * 2);
   });
 

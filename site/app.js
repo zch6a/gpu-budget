@@ -1,7 +1,7 @@
 // @ts-check
 // The page: the form's values in the link (so a configuration can be shared), the same engine as the command line.
-import { GPUS, MODELS } from "./data.js";
-import { finetuneMemory, fromHFConfig, gib, inferMemory, params, trainMemory, trainTime, usableBytes } from "./engine.js";
+import { GPUS, MODELS, PRICES } from "./data.js";
+import { finetuneMemory, fromHFConfig, gib, inferMemory, params, priceFor, trainMemory, trainTime, usableBytes } from "./engine.js";
 import { RECORDS } from "./records.js";
 
 const form = /** @type {HTMLFormElement} */ (document.getElementById("form"));
@@ -30,6 +30,15 @@ function fill(select, options) {
 fill(/** @type {HTMLSelectElement} */ ($("model")), [...Object.entries(MODELS).map(([k, m]) => /** @type {[string, string]} */ ([k, m.name])), ["custom", "Custom: paste config.json"]]);
 fill(/** @type {HTMLSelectElement} */ ($("gpu")), Object.entries(GPUS).map(([k, g]) => [k, g.name]));
 fill(/** @type {HTMLSelectElement} */ ($("draft")), Object.entries(MODELS).filter(([, m]) => params(m).total < 10e9).map(([k, m]) => [k, m.name]));
+
+/** The listed prices for the GPU chosen (keeping the provider chosen when it lists this GPU too). */
+function clouds() {
+  const select = /** @type {HTMLSelectElement} */ ($("cloud"));
+  const keep = select.value;
+  select.replaceChildren();
+  fill(select, [["", "your own"], ...PRICES.filter((p) => p.gpu === val("gpu")).map((p) => /** @type {[string, string]} */ ([p.provider, `${p.provider}: $${p.usd.toFixed(2)} (${p.checked})`]))]);
+  select.value = [...select.options].some((o) => o.value === keep) ? keep : "";
+}
 
 /** The form's values as a link query. */
 function save() {
@@ -125,17 +134,21 @@ function render() {
     bar.append(limit);
     const p = params(m);
     $("note").textContent = `${m.name}: ${(p.total / 1e9).toFixed(2)}B parameters${p.active !== p.total ? `, ${(p.active / 1e9).toFixed(2)}B active per token` : ""}.` +
-      (g.usable ? ` ${g.name}: the GPU may use about ${Math.round(g.usable * 100)}% of the unified memory by default.` : ""); // prettier-ignore
+      (g.usable ? ` ${g.name}: the GPU may use about ${Math.round(g.usable * 100)}% of the unified memory by default.` : "") +
+      (memory.stage ? ` Per GPU of the pipeline's ${memory.stage} stage, the fuller end.` : "") +
+      (g.bf16 === null && mode === "train" ? ` ${g.name}: no checked tensor throughput, so no time estimate.` : ""); // prettier-ignore
     const compute = $("compute");
     compute.textContent = "";
     if (mode === "train") {
-      const t = trainTime({ model: m, tokens: Number(val("tokens")) || 0, gpus: num("gpus", 1), gpu: g, mfu: num("mfu", 0.4), price: Number(val("price")) || undefined,
-        seq: num("seq", 4096) }); // prettier-ignore
+      const listed = val("cloud") ? priceFor(val("cloud"), val("gpu")) : undefined;
+      const t = trainTime({ model: m, tokens: Number(val("tokens")) || 0, gpus: num("gpus", 1), gpu: g, mfu: num("mfu", 0.4),
+        price: listed ? listed.usd : Number(val("price")) || undefined, seq: num("seq", 4096) }); // prettier-ignore
       compute.textContent =
         t.seconds === null || t.gpuHours === null
           ? `${t.flops.toExponential(2)} FLOPs; ${g.name} has no published tensor throughput.`
           : `${t.flops.toExponential(2)} FLOPs: ${(t.seconds / 86400).toFixed(1)} days on ${num("gpus", 1)} GPU(s) at ${(t.mfu * 100).toFixed(0)}% MFU, ` +
-            `${Math.round(t.gpuHours).toLocaleString("en-US")} GPU-hours${t.cost !== null ? `, $${Math.round(t.cost).toLocaleString("en-US")}` : ""}.`; // prettier-ignore
+            `${Math.round(t.gpuHours).toLocaleString("en-US")} GPU-hours${t.cost !== null ? `, $${Math.round(t.cost).toLocaleString("en-US")}` : ""}.` +
+            (listed ? ` Price: ${listed.provider} ${listed.offer}, $${listed.usd}/GPU-hour, checked ${listed.checked}.` : ""); // prettier-ignore
     }
   } catch (e) {
     $("error").hidden = false;
@@ -164,8 +177,14 @@ function records() {
   }
 }
 
+clouds();
 load();
-form.addEventListener("input", render);
-window.addEventListener("hashchange", () => (load(), render()));
+clouds();
+load(); // the provider options depend on the GPU the link names
+form.addEventListener("input", (e) => {
+  if (/** @type {HTMLElement} */ (e.target).getAttribute("name") === "gpu") clouds();
+  render();
+});
+window.addEventListener("hashchange", () => (load(), clouds(), load(), render()));
 records();
 render();
