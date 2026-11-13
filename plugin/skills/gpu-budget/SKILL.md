@@ -22,6 +22,9 @@ npx github:zch6a/gpu-budget models     # built-in models;  gpus: built-in GPUs
   fit, and the tool says what to try: run the suggestion and report the result rather than giving up.
 - These are estimates of what the tensors need; frameworks add fragmentation and buffers. Tell the user to leave
   headroom (10–20%), and say which assumptions matter (FlashAttention, recomputation, micro-batch, sequence).
+- Match the user's framework: tensor parallelism assumes Megatron's sequence parallelism (`--no-sp` for DeepSpeed
+  AutoTP or FSDP + TP); `--fp32-grads` for Megatron's FP32 gradients; `--zero 1` with pipeline parallelism (the tool
+  refuses ZeRO-2/3 there, as DeepSpeed does).
 - Time needs `--tokens` and assumes an MFU (`--mfu`, 0.4 by default); cost needs the user's `--price` per GPU-hour.
   `--json` gives the numbers for further work.
 - The page (https://zch6a.github.io/gpu-budget/) takes the same settings and its link can be shared.

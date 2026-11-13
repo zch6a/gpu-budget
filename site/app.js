@@ -140,6 +140,10 @@ function render() {
       tr.append(name, amount);
       rows.append(tr);
     }
+    // the bar, for a screen reader: its parts and the GPU's memory in words
+    const spoken = PARTS.filter(([key]) => /** @type {Record<string, number>} */ (/** @type {unknown} */ (memory))[key] > 0)
+      .map(([key, label]) => `${mode === "infer" && key === "activations" ? "Working buffer" : label} ${gib(/** @type {Record<string, number>} */ (/** @type {unknown} */ (memory))[key])}`);
+    bar.setAttribute("aria-label", `${spoken.join(", ")}; ${gib(memory.total)} of ${gib(usable)}`);
     const limit = document.createElement("span");
     limit.className = "limit";
     limit.style.left = `${(usable / scale) * 100}%`;

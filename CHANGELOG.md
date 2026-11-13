@@ -17,4 +17,6 @@ First release.
 - Checked against GPT-3's and Llama 3's training compute, Llama 2's GPU-hours, ZeRO's model states, Korthikanti et
   al.'s activation formula (exactly, with `--dropout`), QLoRA's 65B on one 48 GB GPU, vLLM's KV cache, and the
   parameter counts Hugging Face publishes.
-- The page: the same engine, the settings in the link, a Copy link button.
+- Options for how frameworks differ: `--no-sp` (tensor parallelism without sequence parallelism), `--fp32-grads`
+  (Megatron's FP32 gradients), `--dropout`, `--fp8` (the time at the FP8 peak).
+- The page: the same engine, the settings in the link (a pasted config.json too), a Copy link button.

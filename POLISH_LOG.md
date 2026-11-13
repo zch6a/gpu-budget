@@ -150,3 +150,26 @@ screenshot and social card redone.
 Tests: 86 (were 75), type check clean.
 
 Next: round 4.
+
+### 2026-11-13 — polishing round 4
+
+**Security and dependencies**: no runtime dependencies (`npm audit --omit=dev`: nothing); the dev dependencies (the
+type checker, Node's types) audited against the public registry: 0 vulnerabilities. No eval, no network, no HTML from
+data, in the command line or the page; the page's Content-Security-Policy allows its own files only.
+
+**The lockfile pointed at a mirror**: npm on this machine is set to registry.npmmirror.com, and `package-lock.json`
+had recorded its URLs, so CI and anyone installing would have fetched from a mirror they never chose. The URLs point
+at registry.npmjs.org now (the integrity hashes are the same; npm still swaps in a configured registry), and a test
+keeps it so. The same is true of seven earlier projects' lockfiles: noted for them.
+
+**The release**: a test finds this version's CHANGELOG section the way the release workflow's awk finds it (and that
+it is not empty), and checks one version everywhere (package.json, the command line, the plugin) and one Node floor
+(package.json, the README badge, the Skill, CI).
+
+**The page**: the stacked bar is an image to a screen reader with its parts in words ("Weights 15.0 GiB, Working buffer
+576 MiB, …; 17.5 GiB of 80.0 GiB"); every control has a label (checked in a browser). The CHANGELOG and the Skill name
+the options for framework differences (`--no-sp`, `--fp32-grads`, `--dropout`, `--fp8`).
+
+Tests: 89 (were 86), type check clean.
+
+Next: round 5 (a last review of everything, then v0.1.0).
