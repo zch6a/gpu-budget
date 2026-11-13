@@ -20,3 +20,4 @@ First release.
 - Options for how frameworks differ: `--no-sp` (tensor parallelism without sequence parallelism), `--fp32-grads`
   (Megatron's FP32 gradients), `--dropout`, `--fp8` (the time at the FP8 peak).
 - The page: the same engine, the settings in the link (a pasted config.json too), a Copy link button.
+- The npm package is the command line; the page is the site (https://zch6a.github.io/gpu-budget/).

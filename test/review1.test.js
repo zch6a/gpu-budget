@@ -55,7 +55,7 @@ describe("first review", () => {
     const m = MODELS["llama-3.1-70b"];
     const zero0 = finetuneMemory({ model: m, method: "qlora", gpus: 8 }).weights;
     const zero3 = finetuneMemory({ model: m, method: "qlora", gpus: 8, zero: 3 }).weights;
-    assert.ok(zero3 < zero0 / 6, `${zero0 / GiB} ${zero3 / GiB}`); // an eighth, plus the one layer gathered whole
+    assert.ok(zero3 < zero0 / 4, `${zero0 / GiB} ${zero3 / GiB}`); // an eighth, plus the unit gathered whole (the 16-bit embedding here)
   });
 
   it("the prefill buffer is one budget for the batch, not one chunk per sequence", () => {
@@ -122,6 +122,6 @@ describe("first review", () => {
   it("--price or --mfu without --tokens is an error, not ignored", () => {
     const r = run(["train", "llama-3.1-8b", "--gpus", "8", "--zero", "3", "--price", "bogus"]);
     assert.equal(r.code, 2);
-    assert.match(r.err, /--price and --mfu need --tokens/);
+    assert.match(r.err, /--price, --mfu and --fp8 need --tokens/);
   });
 });

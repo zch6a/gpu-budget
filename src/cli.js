@@ -4,7 +4,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { BYTES, GPUS, MODELS, PRICES } from "./data.js";
-import { finetuneMemory, fromHFConfig, gib, gpu, inferMemory, loraParams, model, OPTIMIZERS, params, priceFor, trainMemory, trainTime, usableBytes } from "./engine.js";
+import { activeLora, finetuneMemory, fromHFConfig, gib, gpu, inferMemory, loraParams, model, OPTIMIZERS, params, priceFor, trainMemory, trainTime, usableBytes, verdict } from "./engine.js";
 
 const VERSION = "0.1.0";
 
@@ -219,14 +219,16 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
         memory = finetuneMemory({ ...cfg, method, rank, targets });
         report.method = method;
         if (method !== "full") report.trainable = loraParams(m, rank ?? 16, targets);
+        if (method !== "full") report.activeTrainable = activeLora(m, rank ?? 16, targets);
+        if (method === "full" && (v.rank !== undefined || v.targets !== undefined)) throw new Error("--rank and --targets are for --method lora or qlora");
       } else {
         memory = trainMemory(cfg);
       }
-      if (v.tokens === undefined && (v.price !== undefined || v.mfu !== undefined)) throw new Error("--price and --mfu need --tokens (the tokens to train on)");
+      if (v.tokens === undefined && (v.price !== undefined || v.mfu !== undefined || v.fp8)) throw new Error("--price, --mfu and --fp8 need --tokens (the tokens to train on)");
       if (v.tokens !== undefined) {
         const t = trainTime({ model: m, tokens: /** @type {number} */ (number(v.tokens, "tokens", { min: 1 })), gpus: cfg.gpus ?? 1, gpu: g,
           mfu: number(v.mfu, "mfu", { min: 0.01, max: 1 }), price: price(v.price, v.gpu ?? "h100-sxm", report), seq: cfg.seq, fp8: v.fp8,
-          trainable: /** @type {number | undefined} */ (report.trainable) }); // prettier-ignore
+          trainable: /** @type {number | undefined} */ (report.activeTrainable) }); // prettier-ignore
         report.compute = t;
       }
     }
@@ -244,14 +246,11 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
       const b = /** @type {Record<string, number>} */ (/** @type {unknown} */ (memory))[k];
       if (b > 0) out(`  ${label.padEnd(24)} ${gib(b).padStart(11)}`);
     }
-    const share = (memory.total / usable) * 100;
-    const pct = share >= 99.5 && share < 100.5 ? share.toFixed(1) : share.toFixed(0); // 100% must not hide an overage
-    const close = Math.abs(memory.total - usable) < 0.05 * 2 ** 30;
-    const total = close ? `${(memory.total / 2 ** 30).toFixed(2)} GiB` : gib(memory.total);
-    out(`  ${"total".padEnd(24)} ${total.padStart(11)}  of ${gib(usable)}: ${fits ? "fits" : "does not fit"} (${pct}%)`);
+    const said = verdict(memory.total, usable);
+    out(`  ${"total".padEnd(24)} ${said.text.replace(/ of /, "  of ").replace(/^(\S+ \S+)/, (t) => t.padStart(11))}`);
     const t = /** @type {ReturnType<typeof trainTime> | undefined} */ (report.compute);
     if (t) {
-      out(`  compute ${t.flops.toExponential(2)} FLOPs (${report.trainable !== undefined ? `4 × ${short(params(m).active)} frozen + 6 × ${short(/** @type {number} */ (report.trainable))} adapter` : `6 × ${short(params(m).active)} active`} params × tokens)`);
+      out(`  compute ${t.flops.toExponential(2)} FLOPs (${report.trainable !== undefined ? `4 × ${short(params(m).active)} frozen + 6 × ${short(/** @type {number} */ (report.activeTrainable))} adapter` : `6 × ${short(params(m).active)} active`} params × tokens)`);
       if (t.seconds !== null && t.gpuHours !== null) {
         out(`  time ${duration(t.seconds)} on ${cfg_gpus(v.gpus)} GPU(s) at ${(t.mfu * 100).toFixed(0)}% MFU of ${t.peak} TFLOPS: ${short(t.gpuHours)} GPU-hours` +
           (t.cost !== null ? `, $${short(t.cost)}` : " (add --price for the cost)")); // prettier-ignore
@@ -284,7 +283,7 @@ function hints(command, v) {
     if (command === "finetune" && v.method !== "qlora") out.push("--method qlora");
     if (v.zero !== "3" && (v.pp ?? "1") === "1") out.push("--zero 3");
     if (v.zero !== "1" && (v.pp ?? "1") !== "1") out.push("--zero 1");
-    if (v.recompute !== "full" && command === "train") out.push("--recompute full");
+    if (v.recompute !== "full" && (command === "train" || v.recompute === "none")) out.push("--recompute full");
     out.push("more --gpus (or --tp/--pp)", "a smaller --micro-batch or --seq");
   }
   return out;

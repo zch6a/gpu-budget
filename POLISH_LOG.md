@@ -173,3 +173,32 @@ the options for framework differences (`--no-sp`, `--fp32-grads`, `--dropout`, `
 Tests: 89 (were 86), type check clean.
 
 Next: round 5 (a last review of everything, then v0.1.0).
+
+### 2026-11-13 — polishing round 5
+
+**Final independent review** (10 defects and 1 plausible; it would not have released as it stood; all 10 fixed, tests in
+`test/review3.test.js`):
+
+1. The page kept the last result beside an error (Tensor parallel 3 for a 64-head model: the error under the old
+   green "fits"): an error clears the verdict, the bar, its spoken label, the parts and the compute line (checked in a
+   browser).
+2. The near-limit wording reached the command line but not the page: one `verdict()` in the engine says it for both,
+   and names the difference when the rounded figures look equal ("80.0 GiB of 80.0 GiB: does not fit (100.0%, <1 MiB
+   over)"), which also closes the command line's 5 MiB gap (9).
+3. LoRA's adapters on the experts were not split by expert parallelism (Mixtral, EP 8, ZeRO-0: the full adapter
+   states on each GPU): the experts' adapters follow their matrices, their states sharded over the experts' group.
+4. QLoRA with ZeRO-3 charged the gathered embedding/output unit at NF4, though QLoRA keeps it in 16-bit (Llama 3.1 8B:
+   1.18 GiB of weights for about 2.65).
+5. Serving accepted tensor-parallel sizes that do not split the attention heads (Qwen2.5 7B, 28 heads, TP 8): refused,
+   as training and vLLM do.
+6. A fine-tune with recomputation turned off was not told to turn it on.
+7. `--fp8` without `--tokens`, and `--rank`/`--targets` with `--method full`, did nothing silently: errors.
+8. LoRA compute on a mixture of experts charged every expert's adapters; a token uses topK of them.
+10. The npm package shipped `site/`, which cannot run without the engine beside it (the site build puts it there):
+    the package is the command line; the page is the site.
+11. (plausible, not changed) Moving the major tag with the workflow's token may be refused if a later release's
+    commits touch `.github/workflows/`; to watch at the first such release.
+
+Tests: 97 (were 89), type check clean.
+
+Next: release v0.1.0.

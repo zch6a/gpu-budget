@@ -1,7 +1,7 @@
 // @ts-check
 // The page: the form's values in the link (so a configuration can be shared), the same engine as the command line.
 import { GPUS, MODELS, PRICES } from "./data.js";
-import { finetuneMemory, fromHFConfig, gib, inferMemory, params, priceFor, trainMemory, trainTime, usableBytes } from "./engine.js";
+import { finetuneMemory, fromHFConfig, gib, inferMemory, params, priceFor, trainMemory, trainTime, usableBytes, verdict as say } from "./engine.js";
 import { RECORDS } from "./records.js";
 
 const form = /** @type {HTMLFormElement} */ (document.getElementById("form"));
@@ -110,7 +110,7 @@ function render() {
     const usable = usableBytes(g);
     const fits = memory.total <= usable;
     const verdict = $("verdict");
-    verdict.textContent = `${gib(memory.total)} per GPU of ${gib(usable)}: ${fits ? "fits" : "does not fit"} (${((memory.total / usable) * 100).toFixed(0)}%)`;
+    verdict.textContent = say(memory.total, usable).text.replace(" of ", " per GPU of ");
     verdict.className = fits ? "fits" : "nofit";
     const bar = $("bar");
     bar.replaceChildren();
@@ -168,6 +168,14 @@ function render() {
             (listed ? ` Price: ${listed.provider} ${listed.offer}, $${listed.usd}/GPU-hour, checked ${listed.checked}.` : ""); // prettier-ignore
     }
   } catch (e) {
+    // no result stays on the page beside an error: the verdict, the bar, the parts and the compute line go
+    $("verdict").textContent = "";
+    $("verdict").className = "";
+    $("bar").replaceChildren();
+    $("bar").setAttribute("aria-label", "");
+    /** @type {HTMLTableSectionElement} */ ($("parts").querySelector("tbody")).replaceChildren();
+    $("compute").textContent = "";
+    $("note").textContent = "";
     $("error").hidden = false;
     $("error").textContent = /** @type {Error} */ (e).message;
   }

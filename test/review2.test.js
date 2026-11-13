@@ -88,8 +88,7 @@ describe("second review", () => {
     for (const step of [65536, 4096, 256, 16, 1]) while (inferMemory({ model: MODELS["llama-3.1-8b"], ctx: ctx + step, batch: 4 }).total <= 80 * GiB) ctx += step;
     const r = run(["infer", "llama-3.1-8b", "--ctx", String(ctx + 1), "--batch", "4"]);
     assert.equal(r.code, 1);
-    assert.match(r.out, /does not fit \(100\.0%\)/);
-    assert.match(r.out, /80\.0\d GiB {2}of 80\.0 GiB/);
+    assert.match(r.out, /80\.0 GiB {2}of 80\.0 GiB: does not fit \(100\.0%, (<1|\d+) MiB over\)/);
   });
 
   it("--fp8 is documented, and a GPU without an FP8 figure is named as such", () => {

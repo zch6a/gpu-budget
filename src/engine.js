@@ -94,6 +94,16 @@ export function params(m) {
 /** LoRA's trainable parameters: rank × (in + out) for each adapted matrix of every layer (all linear layers, or attention only). */
 /** @param {Model} m @param {number} rank @param {"all"|"attention"} targets */
 export function loraParams(m, rank, targets = "all") {
+  const p = loraParts(m, rank, targets);
+  return p.dense + p.experts;
+}
+
+/**
+ * LoRA's trainable parameters in two parts: on the routed experts (split by expert parallelism; a token uses topK of
+ * them) and the rest.
+ * @param {Model} m @param {number} rank @param {"all"|"attention"} targets
+ */
+export function loraParts(m, rank, targets = "all") {
   const d = dims(m);
   const h = m.hidden;
   let attn = rank * (h + d.q) + rank * (h + d.k) + rank * (h + d.v) + rank * (d.o + h);
@@ -106,16 +116,27 @@ export function loraParams(m, rank, targets = "all") {
   const mats = m.mlp === "plain" ? 2 : 3;
   const perMlp = (/** @type {number} */ f) => mats * rank * (h + f);
   let mlp = 0;
+  let experts = 0;
   if (targets === "all") {
     if (m.experts) {
       const dense = m.denseLayers ?? 0;
       const shared = m.sharedFfn ? perMlp(m.sharedFfn) : (m.sharedExperts ?? 0) * perMlp(m.ffn);
-      mlp = (dense * perMlp(m.denseFfn ?? m.ffn) + (m.layers - dense) * (m.experts * perMlp(m.ffn) + shared)) / m.layers;
+      mlp = dense * perMlp(m.denseFfn ?? m.ffn) + (m.layers - dense) * shared;
+      experts = (m.layers - dense) * m.experts * perMlp(m.ffn);
     } else {
-      mlp = perMlp(m.ffn);
+      mlp = m.layers * perMlp(m.ffn);
     }
   }
-  return m.layers * (attn + mlp);
+  return { dense: m.layers * attn + mlp, experts };
+}
+
+/**
+ * The adapters one token uses: all but the routed experts', and topK of those.
+ * @param {Model} m @param {number} rank @param {"all"|"attention"} targets
+ */
+export function activeLora(m, rank, targets = "all") {
+  const p = loraParts(m, rank, targets);
+  return p.dense + (m.experts ? (p.experts * (m.topK ?? 1)) / m.experts : 0);
 }
 
 /**
@@ -259,7 +280,7 @@ function stageParams(m, p, stage) {
   const ends = (stage === "first" || p.pp === 1 ? n.embed : 0) + (stage === "last" || p.pp === 1 ? n.head : 0);
   // what ZeRO-3 / FSDP gathers whole at a time: a layer, or the stage's embedding / output layer when larger
   const layer = (layers + n.experts / p.ep) / m.layers / p.tp;
-  return { dense: (layers / p.pp + ends) / p.tp, experts: n.experts / (p.pp * p.tp * p.ep), gathered: Math.max(layer, ends / p.tp), ends: ends / p.tp };
+  return { dense: (layers / p.pp + ends) / p.tp, experts: n.experts / (p.pp * p.tp * p.ep), gathered: Math.max(layer, ends / p.tp), ends: ends / p.tp, layer };
 }
 
 /**
@@ -339,8 +360,14 @@ export function finetuneMemory(c) {
   const opt = OPTIMIZERS[c.optimizer ?? "adamw"];
   if (!opt) throw new Error(`unknown optimizer ${c.optimizer} (${Object.keys(OPTIMIZERS).join(", ")})`);
   const z = p.zero;
-  const trainable = loraParams(m, whole(c.rank, "rank", 16), c.targets ?? "all") / (p.tp * p.pp);
+  const lora = loraParts(m, whole(c.rank, "rank", 16), c.targets ?? "all");
   const edp = p.dp / p.ep;
+  // the adapters follow their matrices: the experts' over tensor, pipeline and expert parallelism, their states sharded
+  // over the experts' own data-parallel group
+  const denseA = lora.dense / (p.tp * p.pp);
+  const expertA = lora.experts / (p.tp * p.pp * p.ep);
+  /** @param {number} bytes @param {number} from */
+  const adapters = (bytes, from) => (denseA * bytes) / (p.zero >= from ? p.dp : 1) + (expertA * bytes) / (p.zero >= from ? edp : 1);
   return fuller((stage) => {
     const s = stageParams(m, p, stage);
     const perParam = c.method === "qlora" ? BYTES.nf4 : 2;
@@ -348,11 +375,12 @@ export function finetuneMemory(c) {
     // GPUs with ZeRO-3, the frozen experts over the experts' own data-parallel group
     const dense = (s.dense - s.ends) * perParam + s.ends * 2;
     const frozen = dense / (z >= 3 ? p.dp : 1) + (s.experts * perParam) / (z >= 3 ? edp : 1);
-    const gathered = z >= 3 && p.dp > 1 ? s.gathered * perParam : 0; // ZeRO-3 / FSDP gathers one unit whole
+    // ZeRO-3 / FSDP gathers one unit whole: a layer (in its format), or the embedding and output layer (16-bit in QLoRA)
+    const gathered = z >= 3 && p.dp > 1 ? Math.max(s.layer * perParam, s.ends * 2) : 0;
     return breakdown({
-      weights: frozen + gathered + (trainable * 2) / (z >= 3 ? p.dp : 1),
-      grads: (trainable * 2) / (z >= 2 ? p.dp : 1),
-      optimizer: (trainable * opt.bytes) / (z >= 1 ? p.dp : 1),
+      weights: frozen + gathered + adapters(2, 3),
+      grads: adapters(2, 2),
+      optimizer: adapters(opt.bytes, 1),
       activations: activations(c, p, stage),
       overhead: (c.overheadGiB ?? 1) * GiB,
     });
@@ -377,6 +405,7 @@ export const PREFILL_TOKENS = 8192; // a serving engine's token budget for one s
 export function inferMemory(c) {
   const m = c.model;
   const tp = whole(c.tp, "tp", 1);
+  headsSplit(m, tp); // as serving engines do: the attention heads must split evenly
   const ctx = whole(c.ctx, "ctx", 4096);
   const batch = whole(c.batch, "batch", 1);
   const q = Object.hasOwn(BYTES, c.quant ?? "bf16") ? BYTES[c.quant ?? "bf16"] : undefined;
@@ -397,8 +426,8 @@ export function inferMemory(c) {
 }
 
 /**
- * Training compute, time and cost. A fine-tune with frozen weights (LoRA/QLoRA: give `trainable`) costs 4 × parameters
- * per token (no weight gradients but the adapters') rather than 6.
+ * Training compute, time and cost. A fine-tune with frozen weights (LoRA/QLoRA: give `trainable`, the adapters a token
+ * uses, as `activeLora` gives them) costs 4 × parameters per token (no weight gradients but the adapters') rather than 6.
  * @param {{model: Model, tokens: number, gpus: number, gpu: Gpu, mfu?: number, price?: number, seq?: number, attention?: boolean, fp8?: boolean, trainable?: number}} c
  */
 export function trainTime(c) {
@@ -518,6 +547,21 @@ export function gpu(id) {
   const key = id.toLowerCase();
   if (!Object.hasOwn(GPUS, key)) throw new Error(`unknown GPU ${id} (GPUs: ${Object.keys(GPUS).join(", ")})`);
   return GPUS[key];
+}
+
+/**
+ * The verdict, as the command line and the page both say it: the total against the GPU's memory, with the difference
+ * in MiB when the rounded figures would look equal ("80.0 GiB of 80.0 GiB: does not fit" must say by how much).
+ * @param {number} total @param {number} usable
+ */
+export function verdict(total, usable) {
+  const fits = total <= usable;
+  const share = (total / usable) * 100;
+  const pct = share >= 99.5 && share < 100.5 ? share.toFixed(1) : share.toFixed(0);
+  const near = gib(total) === gib(usable);
+  const diff = Math.abs(total - usable) / 2 ** 20;
+  const by = near ? `, ${diff < 1 ? "<1" : Math.round(diff)} MiB ${fits ? "to spare" : "over"}` : "";
+  return { fits, text: `${gib(total)} of ${gib(usable)}: ${fits ? "fits" : "does not fit"} (${pct}%${by})` };
 }
 
 /** Bytes as GiB with one decimal (MiB below 1 GiB, so that a small part does not read 0.0). @param {number} b */
