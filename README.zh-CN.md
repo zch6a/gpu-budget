@@ -38,8 +38,10 @@ gpu-budget prices                                                             # 
 | [Llama 3 405B](https://arxiv.org/abs/2407.21783)，15.6 万亿 token 的训练计算量 | 3.8 × 10^25 FLOPs | 3.80e+25 FLOPs |
 | [Llama 2 70B](https://arxiv.org/abs/2307.09288)，2 万亿 token 用了 1,720,320 A100 GPU 小时 | （Llama 3 报告的 MFU 为 38–43%） | 推算 MFU 42.8% |
 | [ZeRO](https://arxiv.org/abs/1910.02054)：15 亿参数 GPT-2 的混合精度 Adam 模型状态 | 每参数 16 字节，至少 24 GB | 16 字节，24.9 GB |
+| [Korthikanti 等人](https://arxiv.org/abs/2205.05198)：GPT-3 一层的激活（有 dropout、无 FlashAttention） | sbh(34 + 5as/h) 字节 | 完全相同 |
+| [QLoRA](https://arxiv.org/abs/2305.14314)：在一张 48 GB GPU 上微调 65B 模型（rank 64、所有线性层、序列 512） | 单张 48GB GPU 放得下 | 48 中用 45.8 GiB |
 | [vLLM](https://arxiv.org/abs/2309.06180)：OPT-13B 一个 token 的 FP16 KV 缓存 | 800 KB | 819,200 字节 |
-| 11 个内置模型由结构算出的参数量 | Hugging Face 公布的权重参数量 | 逐个参数完全相等 |
+| 12 个内置模型由结构算出的参数量 | Hugging Face 公布的权重参数量 | 逐个参数完全相等 |
 | [DeepSeek-V3](https://arxiv.org/abs/2412.19437)，由结构算出（潜在注意力、256 个专家） | 总 671B，激活 37B | 671.03B，37.55B |
 
 每一行都是一个测试（[src/records.js](src/records.js) 里有出处原文）。

@@ -23,6 +23,7 @@ training and fine-tuning:
   --zero 0|1|2|3      ZeRO stage / FSDP (0)    --optimizer adamw|adamw-8bit|adamw-bf16|sgd (adamw)
   --seq N             sequence length (4096)   --micro-batch N   sequences per GPU per step (1)
   --recompute none|full (none; full for finetune, as LoRA/QLoRA practice)   --no-flash   attention without FlashAttention
+  --dropout           count dropout's masks (most LLM training has dropout off)
   --tokens N          training tokens: adds compute, time (with --mfu, 0.4) and cost (with --price: $ per GPU-hour, or a
                       provider whose listed price for the GPU is used: runpod, lambda; gpu-budget prices)
   --method full|lora|qlora, --rank N (16), --targets all|attention (fine-tuning)
@@ -46,6 +47,7 @@ const OPTIONS = /** @type {const} */ ({
   "micro-batch": { type: "string" },
   recompute: { type: "string" },
   "no-flash": { type: "boolean" },
+  dropout: { type: "boolean" },
   tokens: { type: "string" },
   mfu: { type: "string" },
   price: { type: "string" },
@@ -191,6 +193,7 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
         microBatch: number(v["micro-batch"], "micro-batch", { int: true, min: 1 }),
         recompute: /** @type {"none"|"full"} */ (choice(v.recompute ?? (command === "finetune" ? "full" : "none"), "recompute", ["none", "full"])),
         flash: !v["no-flash"],
+        dropout: Boolean(v.dropout),
         optimizer: /** @type {keyof typeof OPTIMIZERS} */ (choice(v.optimizer ?? "adamw", "optimizer", Object.keys(OPTIMIZERS))),
         overheadGiB,
       };

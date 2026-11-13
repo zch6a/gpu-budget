@@ -55,8 +55,10 @@ Exit status 0 when it fits, 1 when it does not (with what to try), 2 on an error
 | [Llama 3 405B](https://arxiv.org/abs/2407.21783), training compute for 15.6T tokens | 3.8 × 10^25 FLOPs | 3.80e+25 FLOPs |
 | [Llama 2 70B](https://arxiv.org/abs/2307.09288), 1,720,320 A100 GPU-hours for 2T tokens | (Llama 3 reports 38–43% MFU) | 42.8% MFU implied |
 | [ZeRO](https://arxiv.org/abs/1910.02054): model states of a 1.5B GPT-2, mixed-precision Adam | 16 bytes per parameter, at least 24 GB | 16 bytes, 24.9 GB |
+| [Korthikanti et al.](https://arxiv.org/abs/2205.05198): activations of a GPT-3 layer (dropout, no FlashAttention) | sbh(34 + 5as/h) bytes | the same, exactly |
+| [QLoRA](https://arxiv.org/abs/2305.14314): a 65B model fine-tuned on one 48 GB GPU (rank 64, all linear layers, sequence 512) | fits on a single 48GB GPU | 45.8 GiB of 48 |
 | [vLLM](https://arxiv.org/abs/2309.06180): KV cache of one OPT-13B token in FP16 | 800 KB | 819,200 bytes |
-| 11 built-in models' parameter counts, from their architecture | Hugging Face's counts for their weights | equal, to the parameter |
+| 12 built-in models' parameter counts, from their architecture | Hugging Face's counts for their weights | equal, to the parameter |
 | [DeepSeek-V3](https://arxiv.org/abs/2412.19437), from its architecture (latent attention, 256 experts) | 671B total, 37B activated | 671.03B, 37.55B |
 
 Each row is a test ([src/records.js](src/records.js) holds the sources' own words). The architecture of every built-in
@@ -76,7 +78,8 @@ publishes for its weights (GPT-3 and DeepSeek-V3 with their papers' rounded coun
 - **Activations** (after [Korthikanti et al.](https://arxiv.org/abs/2205.05198)), per token and layer, the tensors the
   backward pass keeps, counted for today's layers (RMSNorm, gated MLP, grouped-query attention, FlashAttention); without
   FlashAttention the attention scores too, which grow with the sequence. Full recomputation keeps each layer's input.
-  For Llama 3.1 8B this comes to the paper's 34·h bytes. Plus the FP32 logits for the loss.
+  With dropout (`--dropout`) and without FlashAttention it reduces to the paper's sbh(34 + 5as/h) for a GPT layer,
+  exactly; for Llama 3.1 8B with FlashAttention it comes to 34·h bytes too. Plus the FP32 logits for the loss.
 - **LoRA/QLoRA**: the frozen weights in 16-bit, or 4-bit NF4 with double quantization (QLoRA; embeddings and output
   layer kept 16-bit); gradients and optimizer state only for the adapters, rank × (in + out) per adapted matrix.
 - **Inference**: the weights at their format (INT4: 4 bits plus an FP16 scale per 128), the KV cache

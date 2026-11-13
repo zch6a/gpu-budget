@@ -5,7 +5,7 @@
  */
 
 import { BYTES, GPUS, MODELS } from "./data.js";
-import { impliedMfu, kvBytesPerToken, params, trainMemory, trainTime } from "./engine.js";
+import { activationPerTokenLayer, finetuneMemory, GiB, impliedMfu, kvBytesPerToken, params, trainMemory, trainTime } from "./engine.js";
 
 /**
  * @typedef {object} Record
@@ -64,6 +64,29 @@ export const RECORDS = [
       return { value: v, text: `${(v / 1e9).toFixed(1)} GB (${(v / params(MODELS["gpt2-xl"]).total).toFixed(0)} bytes per parameter)` };
     },
     agrees: (v) => v >= 24e9 && Math.abs(v / params(MODELS["gpt2-xl"]).total - 16) < 1e-9,
+  },
+  {
+    what: "Activations per layer of a GPT-3 layer (dropout, no FlashAttention), sequence 2048",
+    published: "sbh(34 + 5as/h) bytes",
+    quote: "Activations memory per layer = sbh(34 + 5as/h) … the network and the activations are stored in a 16-bit floating point format",
+    source: "https://arxiv.org/abs/2205.05198",
+    computed: () => {
+      const m = MODELS["gpt-3-175b"];
+      const v = activationPerTokenLayer(m, 2048, false, true);
+      return { value: v, text: `${v.toLocaleString("en-US")} bytes per token (h = ${m.hidden}, a = ${m.heads})` };
+    },
+    agrees: (v) => v === MODELS["gpt-3-175b"].hidden * (34 + (5 * 96 * 2048) / MODELS["gpt-3-175b"].hidden),
+  },
+  {
+    what: "QLoRA: fine-tuning a 65B model on one 48 GB GPU (rank 64, all linear layers, sequence 512, recomputation)",
+    published: "fits on a single 48GB GPU",
+    quote: "reduces memory usage enough to finetune a 65B parameter model on a single 48GB GPU",
+    source: "https://arxiv.org/abs/2305.14314",
+    computed: () => {
+      const v = finetuneMemory({ model: MODELS["llama-65b"], method: "qlora", rank: 64, seq: 512, microBatch: 1, recompute: "full" }).total;
+      return { value: v, text: `${(v / GiB).toFixed(1)} GiB of 48` };
+    },
+    agrees: (v) => v <= GPUS["l40s"].memory * GiB,
   },
   {
     what: "KV cache of one token, OPT 13B in FP16",

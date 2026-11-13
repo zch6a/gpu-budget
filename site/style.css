@@ -32,6 +32,7 @@ td.num { text-align: right; white-space: nowrap; }
 td .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
 td .how { display: block; color: var(--muted); font-size: 12px; }
 #compute { margin-top: 14px; }
+.share { margin: 0 0 10px; } .share button { font: inherit; font-size: 13px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--fg); cursor: pointer; }
 .error { color: var(--bad); }
 .note { color: var(--muted); font-size: 13px; }
 .records { margin-top: 32px; }

@@ -9,7 +9,8 @@
  *   Tensor and pipeline parallelism divide them; expert parallelism divides the experts.
  * - Activations (Korthikanti et al. 2022, arXiv:2205.05198), counted for today's layers (RMSNorm, gated MLP,
  *   grouped-query attention, FlashAttention): per layer and token, the tensors the backward pass needs, in 16-bit;
- *   without FlashAttention the attention scores too (2·heads·seq bytes per token). Full recomputation keeps only each
+ *   without FlashAttention the attention scores too (2·heads·seq bytes per token); with dropout its masks (1 byte per
+ *   element) and the attention dropout's output, which for a GPT layer gives the paper's sbh(34 + 5as/h) exactly. Full recomputation keeps only each
  *   layer's input. Sequence parallelism divides by the tensor-parallel size; with pipeline parallelism (1F1B) the first
  *   stage holds as many microbatches as there are stages, which comes to the whole model's layers.
  * - Compute (Kaplan et al. 2020; the convention labs report totals in): 6 × parameters × tokens, the active
@@ -130,9 +131,9 @@ export function kvBytesPerToken(m, bytes, tp = 1) {
 
 /**
  * Activation bytes per token per layer that the backward pass keeps (16-bit), for today's layers; see the module.
- * @param {Model} m @param {number} seq @param {boolean} flash
+ * @param {Model} m @param {number} seq @param {boolean} flash @param {boolean} [dropout]
  */
-export function activationPerTokenLayer(m, seq, flash = true) {
+export function activationPerTokenLayer(m, seq, flash = true, dropout = false) {
   const h = m.hidden;
   const d = dims(m);
   const f = m.experts ? m.ffn * (m.topK ?? 1) + (m.sharedFfn ?? m.ffn * (m.sharedExperts ?? 0)) : m.ffn;
@@ -140,7 +141,10 @@ export function activationPerTokenLayer(m, seq, flash = true) {
   const attention = 2 * h + 2 * h + 2 * d.q + 2 * d.k + 2 * d.v + 2 * d.o; // norm input, projection input, Q, K, V, the output
   const norms = 2 * h;
   const scores = flash ? 0 : 2 * m.heads * seq; // the softmax output, without FlashAttention
-  return attention + mlp + norms + scores;
+  // dropout: a 1-byte mask after the attention and after the MLP; without FlashAttention also the attention dropout's mask
+  // (1 byte) and output (2 bytes) over the scores (FlashAttention regenerates its dropout instead of storing it)
+  const masks = dropout ? 2 * h + (flash ? 0 : 3 * m.heads * seq) : 0;
+  return attention + mlp + norms + scores + masks;
 }
 
 /**
@@ -181,6 +185,7 @@ export const OPTIMIZERS = {
  * @property {number} [microBatch]
  * @property {"none"|"full"} [recompute]
  * @property {boolean} [flash]
+ * @property {boolean} [dropout] dropout in training (most LLM training turns it off)
  * @property {keyof typeof OPTIMIZERS} [optimizer]
  * @property {number} [overheadGiB] CUDA context, allocator: 1 GiB by default
  */
@@ -238,7 +243,7 @@ function activations(c, p, stage) {
   const m = c.model;
   const seq = c.seq ?? 4096;
   const b = c.microBatch ?? 1;
-  const perLayer = activationPerTokenLayer(m, seq, c.flash ?? true);
+  const perLayer = activationPerTokenLayer(m, seq, c.flash ?? true, c.dropout ?? false);
   const layersHeld = p.pp === 1 || stage === "first" ? m.layers : m.layers / p.pp;
   const kept = c.recompute === "full" ? layersHeld * 2 * m.hidden + perLayer : layersHeld * perLayer; // full: each layer's input, and one being recomputed
   const logits = p.pp === 1 || stage === "last" ? 4 * m.vocab : 0; // FP32 logits for the loss, per token

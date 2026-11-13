@@ -82,3 +82,25 @@ The README's example moved from 33.4 to 36.6 GiB (ZeRO-3's gathered layer); scre
 Tests: 70 (were 52), type check clean.
 
 Next: round 2.
+
+### 2026-11-13 — polishing round 2
+
+**Two more published checks**, each from the paper's own words:
+
+- Korthikanti et al.'s activation formula, sbh(34 + 5as/h): their count includes dropout's masks (1 byte per element)
+  and the attention dropout's output, which today's LLM training mostly leaves out. With `--dropout` (new) and without
+  FlashAttention, the engine's formula, written for today's layers, reduces to theirs exactly for a GPT-3 layer
+  (1,400,832 bytes per token at sequence 2048). A record and a test.
+- QLoRA: "finetune a 65B parameter model on a single 48GB GPU". LLaMA 65B added (its config from Hugging Face, its
+  count 65,285,660,672 to the parameter); QLoRA with rank 64 on all linear layers, sequence 512 and recomputation
+  comes to 45.8 GiB of 48: the claim holds, narrowly (16-bit LoRA would need about 122 GiB).
+
+**The page**: a Copy link button (the link holds the settings; checked in a browser: it copies the page's address and
+says so). **The package**: `npm pack` holds the code, the page and the docs only; a test checks the list.
+
+Docs: the CHANGELOG brought up to date (16 models, 13 GPUs, prices, the checks); the README's table has the two new
+rows.
+
+Tests: 74 (were 70), type check clean.
+
+Next: round 3.

@@ -177,6 +177,12 @@ function records() {
   }
 }
 
+$("share").addEventListener("click", () => {
+  const done = (/** @type {string} */ text) => ($("shared").textContent = text);
+  if (navigator.clipboard) navigator.clipboard.writeText(location.href).then(() => done("Copied: the link holds these settings."), () => done(location.href));
+  else done(location.href);
+});
+
 clouds();
 load();
 clouds();

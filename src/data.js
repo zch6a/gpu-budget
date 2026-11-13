@@ -53,6 +53,8 @@ export const MODELS = {
     published: 405853388800, source: "https://huggingface.co/meta-llama/Llama-3.1-405B/blob/main/config.json" },
   "llama-3.2-1b": { name: "Llama 3.2 1B", layers: 16, hidden: 2048, heads: 32, kvHeads: 8, headDim: 64, ffn: 8192, vocab: 128256, tied: true,
     published: 1235814400, source: "https://huggingface.co/meta-llama/Llama-3.2-1B/blob/main/config.json" },
+  "llama-65b": { name: "LLaMA 65B", layers: 80, hidden: 8192, heads: 64, kvHeads: 64, ffn: 22016, vocab: 32000, tied: false,
+    published: 65285660672, source: "https://huggingface.co/huggyllama/llama-65b/blob/main/config.json" },
   "llama-2-7b": { name: "Llama 2 7B", layers: 32, hidden: 4096, heads: 32, kvHeads: 32, ffn: 11008, vocab: 32000, tied: false,
     published: 6738415616, source: "https://huggingface.co/meta-llama/Llama-2-7b-hf/blob/main/config.json" },
   "llama-2-70b": { name: "Llama 2 70B", layers: 80, hidden: 8192, heads: 64, kvHeads: 8, ffn: 28672, vocab: 32000, tied: false,
