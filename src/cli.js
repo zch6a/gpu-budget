@@ -24,6 +24,10 @@ training and fine-tuning:
   --seq N             sequence length (4096)   --micro-batch N   sequences per GPU per step (1)
   --recompute none|full (none; full for finetune, as LoRA/QLoRA practice)   --no-flash   attention without FlashAttention
   --dropout           count dropout's masks (most LLM training has dropout off)
+  --no-sp             tensor parallelism without sequence parallelism (DeepSpeed AutoTP, FSDP + TP): the norms' and
+                      projections' inputs are whole on each GPU
+  --fp32-grads        FP32 gradients (Megatron's main grads), 4 bytes per parameter instead of 2
+  --fp8               the time at the GPU's FP8 peak (memory is the same: master weights and states stay as they are)
   --tokens N          training tokens: adds compute, time (with --mfu, 0.4) and cost (with --price: $ per GPU-hour, or a
                       provider whose listed price for the GPU is used: runpod, lambda; gpu-budget prices)
   --method full|lora|qlora, --rank N (16), --targets all|attention (fine-tuning)
@@ -48,6 +52,8 @@ const OPTIONS = /** @type {const} */ ({
   recompute: { type: "string" },
   "no-flash": { type: "boolean" },
   dropout: { type: "boolean" },
+  "no-sp": { type: "boolean" },
+  "fp32-grads": { type: "boolean" },
   tokens: { type: "string" },
   mfu: { type: "string" },
   price: { type: "string" },
@@ -121,16 +127,18 @@ function loadModel(id) {
 }
 
 /** @param {number} n */
-function short(n) {
+export function short(n) {
+  if (Math.abs(n) >= 1e15) return n.toExponential(2); // past trillions, a power of ten reads better than "33814473842.01T"
   /** @type {[number, string][]} */
   const units = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
   for (const [v, u] of units) if (Math.abs(n) >= v) return `${(n / v).toFixed(2)}${u}`;
-  return String(n);
+  return String(Math.round(n * 100) / 100);
 }
 
 /** @param {number} s */
-function duration(s) {
+export function duration(s) {
   const d = s / 86400;
+  if (d >= 730) return `${short(d / 365.25)} years`;
   return d >= 2 ? `${d.toFixed(1)} days` : `${(s / 3600).toFixed(1)} hours`;
 }
 
@@ -170,6 +178,11 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
     }
     if (!["train", "finetune", "infer"].includes(command ?? "")) throw new Error(`unknown command ${command ?? ""} (train, finetune, infer, models, gpus, prices)`);
     if (!id) throw new Error(`${command}: which model? (gpu-budget models, or a config.json)`);
+    const notFor = command === "infer"
+      ? ["gpus", "pp", "ep", "zero", "optimizer", "seq", "micro-batch", "recompute", "no-flash", "dropout", "no-sp", "fp32-grads", "tokens", "mfu", "price", "fp8", "method", "rank", "targets"]
+      : ["quant", "kv", "ctx", "batch", "draft", ...(command === "train" ? ["method", "rank", "targets"] : [])]; // prettier-ignore
+    const stray = notFor.filter((k) => /** @type {Record<string, unknown>} */ (v)[k] !== undefined);
+    if (stray.length) throw new Error(`${stray.map((k) => `--${k}`).join(", ")} ${stray.length === 1 ? "does" : "do"} not apply to ${command}${command === "infer" && stray.includes("gpus") ? " (to split the model over GPUs: --tp)" : ""}`);
     const m = loadModel(id);
     const g = gpu(v.gpu ?? "h100-sxm");
     const overheadGiB = number(v.overhead, "overhead");
@@ -194,6 +207,8 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
         recompute: /** @type {"none"|"full"} */ (choice(v.recompute ?? (command === "finetune" ? "full" : "none"), "recompute", ["none", "full"])),
         flash: !v["no-flash"],
         dropout: Boolean(v.dropout),
+        sequenceParallel: !v["no-sp"],
+        gradBytes: /** @type {2|4} */ (v["fp32-grads"] ? 4 : 2),
         optimizer: /** @type {keyof typeof OPTIMIZERS} */ (choice(v.optimizer ?? "adamw", "optimizer", Object.keys(OPTIMIZERS))),
         overheadGiB,
       };
@@ -229,7 +244,11 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
       const b = /** @type {Record<string, number>} */ (/** @type {unknown} */ (memory))[k];
       if (b > 0) out(`  ${label.padEnd(24)} ${gib(b).padStart(11)}`);
     }
-    out(`  ${"total".padEnd(24)} ${gib(memory.total).padStart(11)}  of ${gib(usable)}: ${fits ? "fits" : "does not fit"} (${((memory.total / usable) * 100).toFixed(0)}%)`);
+    const share = (memory.total / usable) * 100;
+    const pct = share >= 99.5 && share < 100.5 ? share.toFixed(1) : share.toFixed(0); // 100% must not hide an overage
+    const close = Math.abs(memory.total - usable) < 0.05 * 2 ** 30;
+    const total = close ? `${(memory.total / 2 ** 30).toFixed(2)} GiB` : gib(memory.total);
+    out(`  ${"total".padEnd(24)} ${total.padStart(11)}  of ${gib(usable)}: ${fits ? "fits" : "does not fit"} (${pct}%)`);
     const t = /** @type {ReturnType<typeof trainTime> | undefined} */ (report.compute);
     if (t) {
       out(`  compute ${t.flops.toExponential(2)} FLOPs (${report.trainable !== undefined ? `4 × ${short(params(m).active)} frozen + 6 × ${short(/** @type {number} */ (report.trainable))} adapter` : `6 × ${short(params(m).active)} active`} params × tokens)`);
@@ -239,15 +258,36 @@ export function main(argv, out = (s) => process.stdout.write(`${s}\n`), err = (s
         const listed = /** @type {import("./data.js").Price | undefined} */ (report.listedPrice);
         if (listed) out(`  price: ${listed.provider} ${listed.offer}, $${listed.usd}/GPU-hour, checked ${listed.checked} (${listed.source})`);
       } else {
-        out(`  time: ${g.name} has no published tensor throughput`);
+        out(`  time: no checked ${v.fp8 ? "FP8 " : ""}tensor throughput for ${g.name}, so no time estimate${v.fp8 && g.bf16 ? " (without --fp8: its BF16 peak)" : ""}`);
       }
     }
-    if (!fits) err(`gpu-budget: it does not fit: try ${command === "infer" ? "--quant int4, --kv fp8, a shorter --ctx or a smaller --batch, or --tp over more GPUs" : command === "finetune" ? "--method qlora, a smaller --micro-batch or --seq, or more --gpus with --zero 3" : "--zero 3, more --gpus (or --tp/--pp), --recompute full, a smaller --micro-batch or --seq"}`);
+    if (!fits) err(`gpu-budget: it does not fit: try ${hints(command ?? "", v).join(", ")}`);
     return fits ? 0 : 1;
   } catch (e) {
     err(`gpu-budget: ${/** @type {Error} */ (e).message}`);
     return 2;
   }
+}
+
+/**
+ * What to try when it does not fit: only what is not set already, and nothing the engine refuses (ZeRO-2/3 with pipeline
+ * parallelism).
+ * @param {string} command @param {Record<string, string | boolean | undefined>} v
+ */
+function hints(command, v) {
+  const out = [];
+  if (command === "infer") {
+    if (v.quant !== "int4") out.push("--quant int4");
+    if (v.kv !== "fp8" && v.kv !== "int8") out.push("--kv fp8");
+    out.push("a shorter --ctx or a smaller --batch", "--tp over more GPUs");
+  } else {
+    if (command === "finetune" && v.method !== "qlora") out.push("--method qlora");
+    if (v.zero !== "3" && (v.pp ?? "1") === "1") out.push("--zero 3");
+    if (v.zero !== "1" && (v.pp ?? "1") !== "1") out.push("--zero 1");
+    if (v.recompute !== "full" && command === "train") out.push("--recompute full");
+    out.push("more --gpus (or --tp/--pp)", "a smaller --micro-batch or --seq");
+  }
+  return out;
 }
 
 /** @param {string | undefined} gpus */

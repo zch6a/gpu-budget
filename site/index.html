@@ -46,7 +46,7 @@
       <label>Pipeline parallel <input name="pp" type="number" min="1" value="1"></label>
       <label>Sequence length <input name="seq" type="number" min="1" value="4096"></label>
       <label>Micro-batch <input name="mb" type="number" min="1" value="1"></label>
-      <label>Recompute <select name="recompute"><option value="full">full (gradient checkpointing)</option><option value="none">none</option></select></label>
+      <label>Recompute <select name="recompute"><option value="">default (full to fine-tune, none to train)</option><option value="full">full (gradient checkpointing)</option><option value="none">none</option></select></label>
       <label>Optimizer <select name="optimizer"><option value="adamw">AdamW (mixed precision)</option><option value="adamw-8bit">AdamW 8-bit</option><option value="adamw-bf16">AdamW BF16 states</option><option value="sgd">SGD momentum</option></select></label>
     </div>
 

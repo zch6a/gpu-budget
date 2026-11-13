@@ -104,3 +104,49 @@ rows.
 Tests: 74 (were 70), type check clean.
 
 Next: round 3.
+
+### 2026-11-13 — polishing round 3
+
+Checked first: a fresh `npx -y github:zch6a/gpu-budget` (empty cache) installs and runs in about 22 seconds; odd inputs
+(a context of 0, a fractional batch, unknown formats, upper-case names) give one clear line each. Huge values printed
+"176117051260456992768.0 days" and "33814473842.01T GPU-hours": beyond trillions a power of ten, beyond two years
+years ("4.82e+17 years").
+
+**Second independent review** (15; two of them, the number formatting and the wording for GPUs without a checked
+throughput, already fixed above; the other 13 fixed, tests in `test/review2.test.js`):
+
+1. LoRA with expert parallelism and ZeRO-3 sharded the frozen experts twice (round 1's fix had gone into training only):
+   Mixtral, 8 GPUs, EP 8: 2.15 GiB of weights for about 10.9. Over the experts' own group now.
+2. Activations were always divided by tensor parallelism, assuming sequence parallelism without saying so. It is the
+   default now and said; `--no-sp` keeps the norms' and projections' inputs whole on each GPU, which reproduces
+   Korthikanti et al.'s sbh(10 + 24/t + 5as/ht) exactly (a test).
+3. The page still described the old 512-token buffer.
+4. Two records were too loose to catch a regression (Llama 2's MFU anywhere in 0.3–0.6; QLoRA only an upper bound):
+   their values are pinned in a test (42.8% ± 0.2; 45.8 ± 0.1 GiB), the records keeping what the papers say.
+5. Training accepted tensor-parallel sizes that do not split the heads (Megatron refuses), and latent attention under
+   tensor parallelism was not checked: refused with the reason.
+6. `--fp8` was undocumented, and on an A100 said "no checked tensor throughput": documented (the time at the FP8 peak,
+   memory unchanged), and the message names FP8 and points to the BF16 figure.
+7. The README said 12 models match to the parameter: 13 (LLaMA 65B joined in round 2).
+8. (plausible) ZeRO-3 gathered only a layer: the larger of a layer and the embedding/output unit now (stated).
+9. LoRA on latent attention counted plain q/k/v/o matrices (11% too many for DeepSeek-V3): q_a, q_b, kv_a, kv_b, o.
+10. Pipeline sizes that do not divide the layers were accepted (Llama 3.1 405B at 31.5 layers a stage): refused.
+11. The CLI ignored options that do not apply (`infer --gpus 8 --tokens ...` dropped them silently) and hinted at
+    what was already set, or at ZeRO-3 with pipeline parallelism: options that do not apply are an error (with
+    "to split the model over GPUs: --tp" for --gpus); the hints skip what is set and what the engine refuses.
+12. (plausible) The draft model's KV cache ignored `--kv`: it follows the target's format.
+13. (plausible) Megatron keeps FP32 gradients: `--fp32-grads` (4 bytes per parameter).
+14. A total just over the limit read "80.0 GiB of 80.0 GiB: does not fit (100%)": two decimals and one more digit of
+    percentage near the limit (a test finds such a context and checks).
+15. The page dropped a custom config.json from the link (it opened on an error), defaulted training to recomputation
+    unlike the command line, and kept old values when a new link was followed: the config is kept, the recompute
+    default follows the mode as on the command line, a new link starts from the defaults (checked in a browser).
+
+Also: `package.json` had gone back to Node ≥20 (npm's rewrite of the file); ≥22, as the README says.
+
+The README's example moved to 41.3 GiB (ZeRO-3's gathered unit is the embedding and output layer for Llama 3.1 70B);
+screenshot and social card redone.
+
+Tests: 86 (were 75), type check clean.
+
+Next: round 4.

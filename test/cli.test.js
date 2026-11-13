@@ -111,3 +111,15 @@ describe("prices", () => {
     assert.match(r.out, /check the provider's page/);
   });
 });
+
+describe("numbers in the output", () => {
+  it("huge values read as powers of ten and years, not thirty-digit days", async () => {
+    const { short, duration } = await import("../src/cli.js");
+    assert.equal(short(3.38e22), "3.38e+22");
+    assert.equal(short(1234), "1.23K");
+    assert.equal(duration(86400 * 365.25 * 5), "5 years");
+    assert.equal(duration(86400 * 3), "3.0 days");
+    const r = run(["train", "llama-3.1-8b", "--gpus", "8", "--zero", "3", "--tokens", "1e30"]);
+    assert.doesNotMatch(r.out, /\d{12,}/);
+  });
+});

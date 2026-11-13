@@ -96,7 +96,13 @@ export function params(m) {
 export function loraParams(m, rank, targets = "all") {
   const d = dims(m);
   const h = m.hidden;
-  const attn = rank * (h + d.q) + rank * (h + d.k) + rank * (h + d.v) + rank * (d.o + h);
+  let attn = rank * (h + d.q) + rank * (h + d.k) + rank * (h + d.v) + rank * (d.o + h);
+  if (m.mla) {
+    // latent attention's own matrices: q_a and q_b (or q), kv_a (with the rotary part), kv_b, o
+    const { qLora, kvLora, nope, rope, v } = m.mla;
+    const q = qLora ? rank * (h + qLora) + rank * (qLora + m.heads * (nope + rope)) : rank * (h + m.heads * (nope + rope));
+    attn = q + rank * (h + kvLora + rope) + rank * (kvLora + m.heads * (nope + v)) + rank * (m.heads * v + h);
+  }
   const mats = m.mlp === "plain" ? 2 : 3;
   const perMlp = (/** @type {number} */ f) => mats * rank * (h + f);
   let mlp = 0;
@@ -119,7 +125,10 @@ export function loraParams(m, rank, targets = "all") {
  * @param {Model} m @param {number} bytes @param {number} [tp]
  */
 export function kvBytesPerToken(m, bytes, tp = 1) {
-  if (m.kvPerToken) return m.layers * m.kvPerToken * bytes;
+  if (m.kvPerToken) {
+    if (tp > 1 && m.heads % tp !== 0) throw new Error(`tensor parallel ${tp} does not split the ${m.heads} attention heads evenly`);
+    return m.layers * m.kvPerToken * bytes;
+  }
   let heads = m.kvHeads;
   if (tp > 1) {
     if (m.kvHeads >= tp && m.kvHeads % tp === 0) heads = m.kvHeads / tp;
@@ -186,6 +195,9 @@ export const OPTIMIZERS = {
  * @property {"none"|"full"} [recompute]
  * @property {boolean} [flash]
  * @property {boolean} [dropout] dropout in training (most LLM training turns it off)
+ * @property {boolean} [sequenceParallel] with tensor parallelism, split the norms' and projections' inputs too (Megatron's
+ *   sequence parallelism; true by default). Without it they are kept whole on every tensor-parallel GPU.
+ * @property {2|4} [gradBytes] bytes per gradient: 2 (BF16, DeepSpeed), 4 (Megatron's FP32 main gradients)
  * @property {keyof typeof OPTIMIZERS} [optimizer]
  * @property {number} [overheadGiB] CUDA context, allocator: 1 GiB by default
  */
@@ -218,8 +230,22 @@ function parallel(c) {
     if (c.model.experts % ep !== 0) throw new Error(`ep (${ep}) must divide the ${c.model.experts} experts`);
   }
   if (pp > 1 && zero >= 2) throw new Error("ZeRO-2/3 with pipeline parallelism: DeepSpeed refuses it, Megatron shards only the optimizer (use --zero 1)");
-  if (pp > c.model.layers) throw new Error(`pp (${pp}) is more than the ${c.model.layers} layers`);
+  if (c.model.layers % pp !== 0) throw new Error(`pp (${pp}) must divide the ${c.model.layers} layers (an even split; frameworks need it unless told otherwise)`);
+  headsSplit(c.model, tp);
   return { gpus, tp, pp, dp, ep, zero };
+}
+
+/**
+ * Tensor parallelism splits the attention heads, and the KV heads (or replicates them when there are more GPUs than KV
+ * heads): the heads must divide.
+ * @param {Model} m @param {number} tp
+ */
+function headsSplit(m, tp) {
+  if (tp === 1) return;
+  if (m.heads % tp !== 0) throw new Error(`tensor parallel ${tp} does not split the ${m.heads} attention heads evenly`);
+  if (!m.mla && !(m.kvHeads % tp === 0 || tp % m.kvHeads === 0)) {
+    throw new Error(`tensor parallel ${tp} does not split ${m.kvHeads} KV heads evenly (use a divisor or a multiple of ${m.kvHeads})`);
+  }
 }
 
 /**
@@ -231,7 +257,9 @@ function stageParams(m, p, stage) {
   const n = params(m);
   const layers = n.total - n.experts - n.embed - n.head;
   const ends = (stage === "first" || p.pp === 1 ? n.embed : 0) + (stage === "last" || p.pp === 1 ? n.head : 0);
-  return { dense: (layers / p.pp + ends) / p.tp, experts: n.experts / (p.pp * p.tp * p.ep), layer: (layers + n.experts / p.ep) / m.layers / p.tp };
+  // what ZeRO-3 / FSDP gathers whole at a time: a layer, or the stage's embedding / output layer when larger
+  const layer = (layers + n.experts / p.ep) / m.layers / p.tp;
+  return { dense: (layers / p.pp + ends) / p.tp, experts: n.experts / (p.pp * p.tp * p.ep), gathered: Math.max(layer, ends / p.tp), ends: ends / p.tp };
 }
 
 /**
@@ -243,11 +271,17 @@ function activations(c, p, stage) {
   const m = c.model;
   const seq = c.seq ?? 4096;
   const b = c.microBatch ?? 1;
-  const perLayer = activationPerTokenLayer(m, seq, c.flash ?? true, c.dropout ?? false);
+  const sp = c.sequenceParallel ?? true;
+  const all = activationPerTokenLayer(m, seq, c.flash ?? true, c.dropout ?? false);
+  // without sequence parallelism the norms' inputs, the attention's and the MLP's input (and dropout's two masks) are
+  // whole on each tensor-parallel GPU: Korthikanti et al.'s sbh(10 + 24/t + 5as/ht)
+  const whole = sp || p.tp === 1 ? 0 : 8 * m.hidden + (c.dropout ? 2 * m.hidden : 0);
+  const perLayer = whole + (all - whole) / p.tp;
+  const input = sp ? (2 * m.hidden) / p.tp : 2 * m.hidden;
   const layersHeld = p.pp === 1 || stage === "first" ? m.layers : m.layers / p.pp;
-  const kept = c.recompute === "full" ? layersHeld * 2 * m.hidden + perLayer : layersHeld * perLayer; // full: each layer's input, and one being recomputed
-  const logits = p.pp === 1 || stage === "last" ? 4 * m.vocab : 0; // FP32 logits for the loss, per token
-  return (seq * b * (kept + logits)) / p.tp;
+  const kept = c.recompute === "full" ? layersHeld * input + perLayer : layersHeld * perLayer; // full: each layer's input, and one being recomputed
+  const logits = p.pp === 1 || stage === "last" ? (4 * m.vocab) / p.tp : 0; // FP32 logits for the loss, the vocabulary split
+  return seq * b * (kept + logits);
 }
 
 /**
@@ -276,10 +310,11 @@ export function trainMemory(c) {
     const s = stageParams(c.model, p, stage);
     /** @param {number} bytes @param {number} from */
     const state = (bytes, from) => (s.dense * bytes) / (z >= from ? p.dp : 1) + (s.experts * bytes) / (z >= from ? edp : 1);
-    const gathered = z >= 3 && p.dp > 1 ? s.layer * 2 : 0;
+    const gathered = z >= 3 && p.dp > 1 ? s.gathered * 2 : 0;
+    const gb = c.gradBytes ?? 2;
     return breakdown({
       weights: state(2, 3) + gathered,
-      grads: state(2, 2) + gathered,
+      grads: state(gb, 2) + (gathered * gb) / 2,
       optimizer: state(opt.bytes, 1),
       activations: activations(c, p, stage),
       overhead: (c.overheadGiB ?? 1) * GiB,
@@ -305,16 +340,17 @@ export function finetuneMemory(c) {
   if (!opt) throw new Error(`unknown optimizer ${c.optimizer} (${Object.keys(OPTIMIZERS).join(", ")})`);
   const z = p.zero;
   const trainable = loraParams(m, whole(c.rank, "rank", 16), c.targets ?? "all") / (p.tp * p.pp);
-  const n = params(m);
+  const edp = p.dp / p.ep;
   return fuller((stage) => {
     const s = stageParams(m, p, stage);
-    const frozenAll = s.dense + s.experts;
-    const ends = ((stage === "first" || p.pp === 1 ? n.embed : 0) + (stage === "last" || p.pp === 1 ? n.head : 0)) / p.tp;
     const perParam = c.method === "qlora" ? BYTES.nf4 : 2;
-    const frozen = c.method === "qlora" ? (frozenAll - ends) * BYTES.nf4 + ends * 2 : frozenAll * 2;
-    const gathered = z >= 3 && p.dp > 1 ? s.layer * perParam : 0; // ZeRO-3 / FSDP gathers one layer whole
+    // QLoRA keeps the embedding and the output layer in 16-bit; the frozen dense weights shard over the data-parallel
+    // GPUs with ZeRO-3, the frozen experts over the experts' own data-parallel group
+    const dense = (s.dense - s.ends) * perParam + s.ends * 2;
+    const frozen = dense / (z >= 3 ? p.dp : 1) + (s.experts * perParam) / (z >= 3 ? edp : 1);
+    const gathered = z >= 3 && p.dp > 1 ? s.gathered * perParam : 0; // ZeRO-3 / FSDP gathers one unit whole
     return breakdown({
-      weights: frozen / (z >= 3 ? p.dp : 1) + gathered + (trainable * 2) / (z >= 3 ? p.dp : 1),
+      weights: frozen + gathered + (trainable * 2) / (z >= 3 ? p.dp : 1),
       grads: (trainable * 2) / (z >= 2 ? p.dp : 1),
       optimizer: (trainable * opt.bytes) / (z >= 1 ? p.dp : 1),
       activations: activations(c, p, stage),
@@ -351,7 +387,8 @@ export function inferMemory(c) {
   const sixteen = q < 1 ? n.embed + n.head : 0;
   const weights = ((n.total - sixteen) * q + sixteen * 2) / tp;
   const kvCache = kvBytesPerToken(m, kvb, tp) * ctx * batch;
-  const draft = c.draft ? params(c.draft).total * 2 + kvBytesPerToken(c.draft, 2) * ctx * batch : 0;
+  // a draft model in 16-bit, whole on each GPU, its KV cache in the same format as the target's
+  const draft = c.draft ? params(c.draft).total * 2 + kvBytesPerToken(c.draft, kvb) * ctx * batch : 0;
   // one step's working tensors for a prefill budget shared by the batch, and the last tokens' logits in FP32
   const tokens = Math.min(batch * ctx, PREFILL_TOKENS);
   const f = m.experts ? m.ffn * (m.topK ?? 1) + (m.sharedFfn ?? m.ffn * (m.sharedExperts ?? 0)) : m.ffn;

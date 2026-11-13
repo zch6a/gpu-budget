@@ -18,7 +18,7 @@ command line, checked against published training runs.
 
 ---
 
-<p align="center"><a href="https://zch6a.github.io/gpu-budget/"><img src="docs/page.png" width="820" alt="The page: Llama 3.1 70B trained on 64 H100s with ZeRO-3: 36.6 GiB per GPU, each part with its formula, and the time and cost"></a></p>
+<p align="center"><a href="https://zch6a.github.io/gpu-budget/"><img src="docs/page.png" width="820" alt="The page: Llama 3.1 70B trained on 64 H100s with ZeRO-3: 41.3 GiB per GPU, each part with its formula, and the time and cost"></a></p>
 <p align="center"><b><a href="https://zch6a.github.io/gpu-budget/">zch6a.github.io/gpu-budget</a></b>: the link always holds your settings, to share.</p>
 
 ```bash
@@ -27,12 +27,12 @@ npx github:zch6a/gpu-budget train llama-3.1-70b --gpus 64 --zero 3 --seq 8192 --
 
 ```
 Llama 3.1 70B on NVIDIA H100 SXM 80GB, train: per GPU
-  weights                      3.6 GiB
-  gradients                    3.6 GiB
+  weights                      6.0 GiB
+  gradients                    6.0 GiB
   optimizer state             12.3 GiB
   activations                 16.0 GiB
   CUDA context, allocator      1.0 GiB
-  total                       36.6 GiB  of 80.0 GiB: fits (46%)
+  total                       41.3 GiB  of 80.0 GiB: fits (52%)
   compute 8.47e+23 FLOPs (6 × 70.55B active params × tokens)
   time 386.8 days on 64 GPU(s) at 40% MFU of 989.5 TFLOPS: 594.19K GPU-hours, $1.49M
 ```
@@ -58,7 +58,7 @@ Exit status 0 when it fits, 1 when it does not (with what to try), 2 on an error
 | [Korthikanti et al.](https://arxiv.org/abs/2205.05198): activations of a GPT-3 layer (dropout, no FlashAttention) | sbh(34 + 5as/h) bytes | the same, exactly |
 | [QLoRA](https://arxiv.org/abs/2305.14314): a 65B model fine-tuned on one 48 GB GPU (rank 64, all linear layers, sequence 512) | fits on a single 48GB GPU | 45.8 GiB of 48 |
 | [vLLM](https://arxiv.org/abs/2309.06180): KV cache of one OPT-13B token in FP16 | 800 KB | 819,200 bytes |
-| 12 built-in models' parameter counts, from their architecture | Hugging Face's counts for their weights | equal, to the parameter |
+| 13 built-in models' parameter counts, from their architecture | Hugging Face's counts for their weights | equal, to the parameter |
 | [DeepSeek-V3](https://arxiv.org/abs/2412.19437), from its architecture (latent attention, 256 experts) | 671B total, 37B activated | 671.03B, 37.55B |
 
 Each row is a test ([src/records.js](src/records.js) holds the sources' own words). The architecture of every built-in
@@ -71,13 +71,16 @@ publishes for its weights (GPT-3 and DeepSeek-V3 with their papers' rounded coun
   gradients and 12 of optimizer state (FP32 master copy, momentum, variance) per parameter. ZeRO stage 1 shards the
   optimizer state over the data-parallel GPUs, stage 2 the gradients too, stage 3 (FSDP full shard) the weights too.
   Tensor and pipeline parallelism divide the model; expert parallelism divides the experts, whose states ZeRO then
-  shards over the experts' own data-parallel group. ZeRO-3 also gathers one layer whole for its computation (weights
-  and a gradient buffer, both counted). With pipeline parallelism the fuller end is reported: the first stage (the
+  shards over the experts' own data-parallel group. ZeRO-3 also gathers one unit whole at a time for its computation, a layer or the
+  embedding and output layer when larger (weights and a gradient buffer, both counted). `--fp32-grads` counts
+  Megatron's FP32 gradients (4 bytes instead of 2). With pipeline parallelism the fuller end is reported: the first stage (the
   embedding, and with 1F1B as many microbatches as stages) or the last (the output layer and the logits). 8-bit Adam,
   BF16 states and SGD are options.
 - **Activations** (after [Korthikanti et al.](https://arxiv.org/abs/2205.05198)), per token and layer, the tensors the
   backward pass keeps, counted for today's layers (RMSNorm, gated MLP, grouped-query attention, FlashAttention); without
   FlashAttention the attention scores too, which grow with the sequence. Full recomputation keeps each layer's input.
+  With tensor parallelism, sequence parallelism is assumed (Megatron's): everything is split; `--no-sp` keeps the
+  norms' and projections' inputs whole on each GPU, Korthikanti et al.'s sbh(10 + 24/t + 5as/ht), exactly.
   With dropout (`--dropout`) and without FlashAttention it reduces to the paper's sbh(34 + 5as/h) for a GPT layer,
   exactly; for Llama 3.1 8B with FlashAttention it comes to 34·h bytes too. Plus the FP32 logits for the loss.
 - **LoRA/QLoRA**: the frozen weights in 16-bit, or 4-bit NF4 with double quantization (QLoRA; embeddings and output
@@ -88,7 +91,8 @@ publishes for its weights (GPT-3 and DeepSeek-V3 with their papers' rounded coun
   step's prefill budget (8,192 tokens, shared by the batch).
 - **Compute**: 6 × active parameters × tokens, the convention the labs report totals in (LoRA/QLoRA: 4 × frozen + 6 ×
   adapter parameters, as frozen weights need no weight gradients); time from the GPU's dense peak and an MFU you choose
-  (40% by default); cost from your price per GPU-hour, or a provider's listed price.
+  (40% by default; `--fp8` uses the FP8 peak, the memory staying as it is); cost from your price per GPU-hour, or a
+  provider's listed price.
 
 GPU figures are the makers' datasheets, dense tensor throughput (NVIDIA lists it with sparsity; dense is half),
 checked on 2026-11-13; each links its source in [src/data.js](src/data.js). Prices (`gpu-budget prices`) are on-demand

@@ -43,20 +43,33 @@ function clouds() {
 /** The form's values as a link query. */
 function save() {
   const q = new URLSearchParams();
-  for (const [k, v] of new FormData(form)) if (typeof v === "string" && v !== "" && k !== "config") q.set(k, v);
+  for (const [k, v] of new FormData(form)) {
+    if (typeof v !== "string" || v === "") continue;
+    if (k === "config") {
+      if (val("model") !== "custom") continue;
+      try {
+        q.set(k, JSON.stringify(JSON.parse(v))); // compact: a pasted config.json kept in the link
+      } catch {
+        continue; // not JSON yet: the error shows; nothing to keep
+      }
+    } else {
+      q.set(k, v);
+    }
+  }
   history.replaceState(null, "", `#${q}`);
 }
 
 /** The link's values into the form (only fields the form has; values the selects lack are ignored). */
 function load() {
   const q = new URLSearchParams(location.hash.slice(1));
+  form.reset(); // a new link starts from the defaults: no value is left over from the last one
   for (const [k, v] of q) {
     const els = form.elements.namedItem(k);
     if (els instanceof RadioNodeList) {
       for (const r of els) if (r instanceof HTMLInputElement && r.value === v) r.checked = true;
     } else if (els instanceof HTMLSelectElement) {
       if ([...els.options].some((o) => o.value === v)) els.value = v;
-    } else if (els instanceof HTMLInputElement) {
+    } else if (els instanceof HTMLInputElement || els instanceof HTMLTextAreaElement) {
       els.value = v;
     }
   }
@@ -85,7 +98,7 @@ function render() {
     const m = val("model") === "custom" ? fromHFConfig(JSON.parse(val("config") || "{}"), "custom") : MODELS[val("model")];
     const g = GPUS[val("gpu")];
     const base = { model: m, gpus: num("gpus", 1), tp: num("tp", 1), pp: num("pp", 1), zero: /** @type {0|1|2|3} */ (Number(val("zero")) || 0),
-      seq: num("seq", 4096), microBatch: num("mb", 1), recompute: /** @type {"none"|"full"} */ (val("recompute") || "full"),
+      seq: num("seq", 4096), microBatch: num("mb", 1), recompute: /** @type {"none"|"full"} */ (val("recompute") || (mode === "finetune" ? "full" : "none")), // the command line's defaults
       optimizer: /** @type {any} */ (val("optimizer") || "adamw") }; // prettier-ignore
     const memory =
       mode === "infer"
@@ -119,7 +132,7 @@ function render() {
       sw.style.background = color;
       const small = document.createElement("span");
       small.className = "how";
-      small.textContent = mode === "infer" && key === "activations" ? "a working buffer: one 512-token prefill chunk per sequence, the last logits" : how;
+      small.textContent = mode === "infer" && key === "activations" ? "one step's working tensors for a prefill budget of 8,192 tokens shared by the batch, and the last logits" : how;
       name.append(sw, mode === "infer" && key === "activations" ? "Working buffer" : label, small);
       const amount = document.createElement("td");
       amount.className = "num";

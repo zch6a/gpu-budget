@@ -55,7 +55,8 @@ describe("training memory", () => {
     assert.equal(at(1).grads, n * 2);
     assert.equal(at(2).grads, (n * 2) / 8);
     assert.equal(at(2).weights, n * 2);
-    const layer = (n - params(m).embed - params(m).head) / m.layers; // ZeRO-3 gathers one layer whole, and reduces its gradients whole
+    // ZeRO-3 gathers one unit whole (a layer, or the embedding and output layer when larger), and reduces its gradients whole
+    const layer = Math.max((n - params(m).embed - params(m).head) / m.layers, params(m).embed + params(m).head);
     assert.equal(at(3).weights, (n * 2) / 8 + layer * 2);
     assert.equal(at(3).grads, (n * 2) / 8 + layer * 2);
   });
