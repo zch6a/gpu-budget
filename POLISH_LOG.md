@@ -202,3 +202,9 @@ Next: round 5 (a last review of everything, then v0.1.0).
 Tests: 97 (were 89), type check clean.
 
 Next: release v0.1.0.
+
+### 2026-11-14 — Chinese README: AI tone
+
+1 place changed: the ZeRO/parallelism formula item chained four semicolons; split into five sentences, wording unchanged.
+The checks follow the findings of lieflat-less-ai-tone (shiujan, CC BY-NC 4.0); its findings are applied, its text is not copied.
+Left as is: the colon-led formula list, parenthesised enumerations (parts, structures), the three 多少 in the tagline, and single semicolons elsewhere.
